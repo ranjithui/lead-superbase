@@ -1,8 +1,7 @@
-"""
 Lead Management Streamlit App
 ---------------------------------
 Features:
-1. Dashboard — lead counts by team & members
+1. Dashboard — all teams & members with progress cards
 2. Daily Upload — add daily leads and update sales conversion
 3. Reporting — weekly and monthly summaries
 4. Admin Panel — create teams, manage members, assign targets, and view per-team data
@@ -38,48 +37,145 @@ tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admi
 
 # ---------------------- Dashboard ----------------------
 if tab == "Dashboard":
-    st.header("📈 Dashboard")
+    st.header("📈 Team & Member Performance Dashboard")
+    st.caption("View all teams and their members’ performance in one view.")
 
-    today = datetime.utcnow().date()
-    start = st.date_input("Start Date", value=today - timedelta(days=30))
-    end = st.date_input("End Date", value=today)
-
-    def get_leads_supabase(start_date=None, end_date=None):
-        if not supabase:
-            return pd.DataFrame()
+    # --- Load Data from Supabase ---
+    def get_table(name):
         try:
-            query = supabase.table("leads").select("*")
-            if start_date:
-                query = query.gte("created_at", start_date.isoformat())
-            if end_date:
-                query = query.lte("created_at", end_date.isoformat())
-            res = query.execute()
+            res = supabase.table(name).select("*").execute()
             df = pd.DataFrame(res.data if hasattr(res, "data") else res)
+            if not df.empty and "id" in df.columns:
+                df["id"] = df["id"].astype(str)
+            if "team_id" in df.columns:
+                df["team_id"] = df["team_id"].astype(str)
             return df
         except Exception as e:
-            st.warning(f"⚠️ Failed to fetch leads: {e}")
+            st.warning(f"⚠️ Failed to fetch {name}: {e}")
             return pd.DataFrame()
 
-    leads_df = get_leads_supabase(start_date=start, end_date=end)
+    teams_df = get_table("teams")
+    users_df = get_table("users")
+    targets_df = get_table("targets")
+    leads_df = get_table("leads")
 
-    if leads_df.empty:
-        st.warning("No leads found for this period.")
+    if teams_df.empty:
+        st.info("No teams found. Please create some in the Admin Panel.")
+        st.stop()
+
+    # --- Prepare Lead Summary ---
+    if not leads_df.empty:
+        leads_df["converted"] = leads_df["converted"].astype(bool)
+        leads_df["sales_value"] = leads_df["sales_value"].fillna(0)
+        lead_summary = leads_df.groupby("owner_id").agg(
+            total_leads=("id", "count"),
+            converted=("converted", "sum"),
+            total_sales=("sales_value", "sum")
+        ).reset_index()
     else:
-        if "created_at" in leads_df.columns:
-            leads_df["created_at"] = pd.to_datetime(leads_df["created_at"])
-        team_counts = leads_df.groupby("team_id", dropna=False).size().reset_index(name="Lead Count")
-        owner_counts = leads_df.groupby("owner_id", dropna=False).size().reset_index(name="Lead Count")
+        lead_summary = pd.DataFrame(columns=["owner_id", "total_leads", "converted", "total_sales"])
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("By Team")
-            st.dataframe(team_counts)
-        with col2:
-            st.subheader("By Member")
-            st.dataframe(owner_counts)
+    # --- Merge Data ---
+    members = users_df.merge(
+        teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
+        on="team_id", how="left"
+    )
+    members = members.merge(
+        targets_df.rename(columns={"user_id": "id"}), on="id", how="left"
+    )
+    members = members.merge(
+        lead_summary.rename(columns={"owner_id": "id"}), on="id", how="left"
+    ).fillna(0)
 
-        st.subheader("Recent Leads")
-        st.dataframe(leads_df.sort_values("created_at", ascending=False).head(50))
+    # --- Display All Teams ---
+    for _, team in teams_df.iterrows():
+        team_name = team["name"]
+        team_id = team["id"]
+        team_members = members[members["team_id"] == team_id]
+
+        if team_members.empty:
+            continue
+
+        total_weekly_target = team_members["weekly_target"].sum()
+        total_monthly_target = team_members["monthly_target"].sum()
+        total_converted = team_members["converted"].sum()
+        total_sales = team_members["total_sales"].sum()
+
+        weekly_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
+        monthly_progress = (total_converted / total_monthly_target * 100) if total_monthly_target > 0 else 0
+
+        # --- Team Card ---
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #007bff, #004085);
+                color: white;
+                padding: 18px 22px;
+                border-radius: 14px;
+                margin-bottom: 15px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            ">
+                <h3 style="margin-bottom: 8px;">🏢 {team_name}</h3>
+                <div style="display:flex; justify-content: space-between;">
+                    <div>
+                        <p style="margin:2px 0;">Weekly Target: <b>{int(total_weekly_target)}</b></p>
+                        <p style="margin:2px 0;">Monthly Target: <b>{int(total_monthly_target)}</b></p>
+                    </div>
+                    <div style="text-align:right;">
+                        <p style="margin:2px 0;">Converted: <b>{int(total_converted)}</b></p>
+                        <p style="margin:2px 0;">Sales: ₹{total_sales:,.2f}</p>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # --- Progress Bars ---
+        st.markdown("**🎯 Weekly Progress**")
+        st.progress(min(weekly_progress / 100, 1.0))
+        st.markdown("**📅 Monthly Progress**")
+        st.progress(min(monthly_progress / 100, 1.0))
+
+        # --- Member Table ---
+        with st.expander(f"👥 {team_name} Members"):
+            display_df = team_members[[
+                "name", "weekly_target", "monthly_target",
+                "total_leads", "converted", "total_sales"
+            ]].rename(columns={
+                "name": "Member",
+                "weekly_target": "Weekly Target",
+                "monthly_target": "Monthly Target",
+                "total_leads": "Leads",
+                "converted": "Converted",
+                "total_sales": "Sales (₹)"
+            })
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+    # --- Overall Summary ---
+    total_all_leads = members["total_leads"].sum()
+    total_all_converted = members["converted"].sum()
+    total_all_sales = members["total_sales"].sum()
+
+    st.markdown(
+        f"""
+        <div style="
+            background: #f8f9fa;
+            padding: 18px;
+            border-radius: 12px;
+            border: 1px solid #dee2e6;
+            margin-top: 30px;">
+            <h4>📈 Overall Performance Summary</h4>
+            <p>Total Leads: <b>{int(total_all_leads)}</b></p>
+            <p>Converted: <b>{int(total_all_converted)}</b></p>
+            <p>Total Sales: ₹{total_all_sales:,.2f}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # ---------------------- Daily Upload ----------------------
 # ---------------------- Daily Upload ----------------------
