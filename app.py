@@ -192,41 +192,168 @@ elif tab == 'Reporting':
 
 # ---------------------- Admin ----------------------
 elif tab == 'Admin':
-    st.header("Admin Panel")
-    st.write("Create teams, add users, set weekly/monthly targets")
+    st.header("Admin Panel — Teams & Members (Inline CRUD)")
+    st.write("Create / Edit / Delete Teams and Team Members. Edit targets inline and click Apply to save changes.")
 
-    with st.expander("Create Team"):
-        team_name = st.text_input("Team name")
-        team_desc = st.text_area("Description")
-        if st.button("Create Team"):
-            if supabase:
-                supabase.table('teams').insert({'name': team_name, 'description': team_desc}).execute()
-                st.success("Team created")
-            else:
-                st.error("DB not configured")
+    # Helper functions for CRUD
+    import uuid
 
-    with st.expander("Add User"):
-        uid = st.text_input("User ID (string)")
-        uname = st.text_input("User name")
-        user_team = st.text_input("Team ID")
-        if st.button("Add User"):
-            if supabase:
-                supabase.table('users').insert({'id': uid, 'name': uname, 'team_id': user_team}).execute()
-                st.success("User added")
-            else:
-                st.error("DB not configured")
+    def get_teams_supabase():
+        if not supabase:
+            return pd.DataFrame()
+        res = supabase.table('teams').select('*').execute()
+        data = res.data if hasattr(res, 'data') else res
+        return pd.DataFrame(data)
 
-    with st.expander("Set Targets"):
-        target_user = st.text_input("User ID for target")
-        weekly = st.number_input("Weekly upload target", value=0)
-        monthly = st.number_input("Monthly upload target", value=0)
-        if st.button("Set Target"):
-            if supabase:
-                supabase.table('targets').upsert({'user_id': target_user, 'weekly': int(weekly), 'monthly': int(monthly)}).execute()
-                st.success("Target set")
-            else:
-                st.error("DB not configured")
+    def upsert_teams_supabase(df: pd.DataFrame):
+        if not supabase or df.empty:
+            return None
+        records = df.to_dict(orient='records')
+        # Use upsert to insert or update based on primary key 'id'
+        return supabase.table('teams').upsert(records).execute()
 
+    def delete_team_supabase(team_id):
+        if not supabase:
+            return None
+        # cascade delete leads and users if desired, otherwise just teams
+        # here we delete users referencing this team first
+        supabase.table('users').delete().eq('team_id', team_id).execute()
+        return supabase.table('teams').delete().eq('id', team_id).execute()
+
+    def get_users_supabase():
+        if not supabase:
+            return pd.DataFrame()
+        res = supabase.table('users').select('*').execute()
+        data = res.data if hasattr(res, 'data') else res
+        return pd.DataFrame(data)
+
+    def upsert_users_supabase(df: pd.DataFrame):
+        if not supabase or df.empty:
+            return None
+        records = df.to_dict(orient='records')
+        return supabase.table('users').upsert(records).execute()
+
+    def delete_user_supabase(user_id):
+        if not supabase:
+            return None
+        # delete leads belonging to user optionally
+        supabase.table('leads').delete().eq('owner_id', user_id).execute()
+        return supabase.table('users').delete().eq('id', user_id).execute()
+
+    def get_targets_supabase():
+        if not supabase:
+            return pd.DataFrame()
+        res = supabase.table('targets').select('*').execute()
+        data = res.data if hasattr(res, 'data') else res
+        return pd.DataFrame(data)
+
+    def upsert_targets_supabase(df: pd.DataFrame):
+        if not supabase or df.empty:
+            return None
+        records = df.to_dict(orient='records')
+        return supabase.table('targets').upsert(records).execute()
+
+    # Load existing dataframes
+    teams_df = get_teams_supabase() if BACKEND == 'supabase' else pd.DataFrame()
+    users_df = get_users_supabase() if BACKEND == 'supabase' else pd.DataFrame()
+    targets_df = get_targets_supabase() if BACKEND == 'supabase' else pd.DataFrame()
+
+    if teams_df.empty:
+        st.info("No teams found (or DB not configured). You can add a new team by editing the table below.")
+
+    st.subheader("Teams")
+    # normalize columns
+    if not teams_df.empty:
+        teams_df = teams_df[['id', 'name', 'description']]
+    else:
+        teams_df = pd.DataFrame(columns=['id','name','description'])
+
+    teams_edited = st.data_editor(teams_df, num_rows="dynamic", key='teams_editor')
+
+    st.subheader("Members")
+    # prepare users table with team names for easier editing
+    if not users_df.empty:
+        users_work = users_df.copy()
+        users_work = users_work[['id','name','team_id']]
+    else:
+        users_work = pd.DataFrame(columns=['id','name','team_id'])
+
+    users_edited = st.data_editor(users_work, num_rows="dynamic", key='users_editor')
+
+    st.subheader("Targets (per user)")
+    if not targets_df.empty:
+        targets_work = targets_df.copy()\        
+    else:
+        targets_work = pd.DataFrame(columns=['user_id','weekly','monthly'])
+
+    targets_edited = st.data_editor(targets_work, num_rows="dynamic", key='targets_editor')
+
+    st.markdown("---")
+    col_apply, col_reset = st.columns([1,1])
+    if col_apply.button("Apply Changes"):
+        # --- Teams: detect deletions and upserts ---
+        try:
+            orig_team_ids = set(teams_df['id'].astype(str))
+        except Exception:
+            orig_team_ids = set()
+        try:
+            new_team_ids = set(teams_edited['id'].dropna().astype(str))
+        except Exception:
+            new_team_ids = set()
+
+        # Deleted teams
+        to_delete_teams = orig_team_ids - new_team_ids
+        for tid in to_delete_teams:
+            delete_team_supabase(tid)
+
+        # Ensure ids exist for new rows
+        if 'id' not in teams_edited.columns:
+            teams_edited['id'] = teams_edited.apply(lambda x: str(uuid.uuid4()), axis=1)
+        else:
+            teams_edited['id'] = teams_edited['id'].fillna('').apply(lambda v: str(uuid.uuid4()) if v=='' else v)
+
+        # Upsert teams
+        upsert_teams_supabase(teams_edited)
+
+        # --- Users: deletions and upserts ---
+        try:
+            orig_user_ids = set(users_work['id'].astype(str))
+        except Exception:
+            orig_user_ids = set()
+        try:
+            new_user_ids = set(users_edited['id'].dropna().astype(str))
+        except Exception:
+            new_user_ids = set()
+
+        to_delete_users = orig_user_ids - new_user_ids
+        for uid in to_delete_users:
+            delete_user_supabase(uid)
+
+        # Ensure ids for new users
+        if 'id' not in users_edited.columns:
+            users_edited['id'] = users_edited.apply(lambda x: str(uuid.uuid4()), axis=1)
+        else:
+            users_edited['id'] = users_edited['id'].fillna('').apply(lambda v: str(uuid.uuid4()) if v=='' else v)
+
+        # Upsert users
+        upsert_users_supabase(users_edited)
+
+        # --- Targets: match user_id and upsert ---
+        # Fill numeric defaults
+        if 'weekly' in targets_edited.columns:
+            targets_edited['weekly'] = targets_edited['weekly'].fillna(0).astype(int)
+        if 'monthly' in targets_edited.columns:
+            targets_edited['monthly'] = targets_edited['monthly'].fillna(0).astype(int)
+
+        # Ensure user_id column exists
+        if 'user_id' not in targets_edited.columns and 'id' in targets_edited.columns:
+            targets_edited = targets_edited.rename(columns={'id':'user_id'})
+
+        upsert_targets_supabase(targets_edited)
+
+        st.success("Applied changes to Supabase (teams, users, targets)")
+    if col_reset.button("Reload from DB"):
+        st.experimental_rerun()
 
 # ---------------------- Schema suggestion ----------------------
 # (This section is a reference—create these tables in Supabase/PG)
