@@ -82,31 +82,41 @@ if tab == "Dashboard":
         st.dataframe(leads_df.sort_values("created_at", ascending=False).head(50))
 
 # ---------------------- Daily Upload ----------------------
+# ---------------------- Daily Upload ----------------------
 elif tab == "Daily Upload":
-    st.header("📤 Daily Lead Update")
+    import pandas as pd
+    from datetime import datetime
+    import streamlit as st
 
+    st.header("📤 Daily Lead Upload & Sales Update")
+
+    # ✅ Safe Supabase fetch helper
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
             df = pd.DataFrame(res.data if hasattr(res, "data") else res)
+            if not df.empty:
+                if "id" in df.columns:
+                    df["id"] = df["id"].astype(str)
+                if "team_id" in df.columns:
+                    df["team_id"] = df["team_id"].astype(str)
             return df
         except Exception as e:
             st.warning(f"⚠️ Failed to fetch {name}: {e}")
             return pd.DataFrame()
 
+    # ✅ DB operations
     def insert_leads(team_id, owner_id, lead_count, date):
         try:
-            rows = []
-            for _ in range(int(lead_count)):
-                rows.append({
-                    "team_id": team_id,
-                    "owner_id": owner_id,
-                    "created_at": datetime.combine(date, datetime.min.time()).isoformat(),
-                    "converted": False,
-                    "sales_value": 0,
-                })
+            rows = [{
+                "team_id": team_id,
+                "owner_id": owner_id,
+                "created_at": datetime.combine(date, datetime.min.time()).isoformat(),
+                "converted": False,
+                "sales_value": 0,
+            } for _ in range(int(lead_count))]
             supabase.table("leads").insert(rows).execute()
-            st.success(f"✅ {lead_count} leads added for member.")
+            st.success(f"✅ {lead_count} leads added successfully for this member.")
         except Exception as e:
             st.error(f"Error inserting leads: {e}")
 
@@ -123,56 +133,119 @@ elif tab == "Daily Upload":
             )
             if hasattr(leads_to_update, "data") and leads_to_update.data:
                 ids = [r["id"] for r in leads_to_update.data]
+                per_lead_value = float(sales_value) / len(ids) if ids else 0
                 for lid in ids:
                     supabase.table("leads").update({
                         "converted": True,
-                        "sales_value": float(sales_value) / len(ids),
+                        "sales_value": per_lead_value,
                         "updated_at": datetime.combine(date, datetime.min.time()).isoformat()
                     }).eq("id", lid).execute()
-                st.success(f"✅ Updated {len(ids)} leads as converted.")
+                st.success(f"✅ {len(ids)} leads marked as converted.")
             else:
-                st.warning("No unconverted leads found to update.")
+                st.warning("⚠️ No unconverted leads available for this member.")
         except Exception as e:
             st.error(f"Error updating sales: {e}")
 
-    # Fetch team & user dropdowns
+    def get_leads():
+        try:
+            res = supabase.table("leads").select("*").execute()
+            df = pd.DataFrame(res.data if hasattr(res, "data") else res)
+            if not df.empty and "created_at" in df.columns:
+                df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+            return df
+        except Exception:
+            return pd.DataFrame()
+
+    # ✅ Load base data
     teams_df = get_table("teams")
     users_df = get_table("users")
-    team_dict = {row["name"]: row["id"] for _, row in teams_df.iterrows()} if not teams_df.empty else {}
+    leads_df = get_leads()
+
+    team_dict = {r["name"]: r["id"] for _, r in teams_df.iterrows()} if not teams_df.empty else {}
+
+    # --- Step 1: Select Team ---
+    st.subheader("🏢 Select Team")
+    selected_team_name = st.selectbox("Team", list(team_dict.keys()) if team_dict else ["No Teams Found"])
+    selected_team_id = team_dict.get(selected_team_name)
+
+    # --- Step 2: Filter Members by Team ---
+    if not users_df.empty and selected_team_id:
+        filtered_members = users_df[users_df["team_id"] == selected_team_id]
+    else:
+        filtered_members = pd.DataFrame()
+
+    member_dict = {m["name"]: m["id"] for _, m in filtered_members.iterrows()} if not filtered_members.empty else {}
+
+    st.markdown("---")
 
     # --- Form 1: Add Daily Leads ---
     st.subheader("📋 Add Daily Leads")
     with st.form("daily_leads_form"):
-        team_name = st.selectbox("Select Team", list(team_dict.keys()) if team_dict else ["No Teams Found"])
-        team_id = team_dict.get(team_name)
-        member_df = users_df[users_df["team_id"] == team_id] if not users_df.empty and team_id else pd.DataFrame()
-        member_dict = {m["name"]: m["id"] for _, m in member_df.iterrows()} if not member_df.empty else {}
         member_name = st.selectbox("Select Team Member", list(member_dict.keys()) if member_dict else ["No Members"])
         lead_count = st.number_input("Lead Count", min_value=1, value=1)
         date = st.date_input("Select Date", datetime.utcnow().date())
         submitted = st.form_submit_button("Submit Leads")
 
-        if submitted and team_id and member_dict.get(member_name):
-            insert_leads(team_id, member_dict.get(member_name), lead_count, date)
+        if submitted:
+            if selected_team_id and member_dict.get(member_name):
+                insert_leads(selected_team_id, member_dict.get(member_name), lead_count, date)
+            else:
+                st.warning("⚠️ Please select a valid team and member.")
 
     st.markdown("---")
 
-    # --- Form 2: Update Sales ---
-    st.subheader("💰 Update Sales Conversion")
+    # --- Form 2: Update Sales Conversion ---
+    st.subheader("💰 Update Converted Leads & Sales Value")
     with st.form("update_sales_form"):
-        team_name2 = st.selectbox("Select Team", list(team_dict.keys()) if team_dict else ["No Teams Found"], key="sales_team")
-        team_id2 = team_dict.get(team_name2)
-        member_df2 = users_df[users_df["team_id"] == team_id2] if not users_df.empty and team_id2 else pd.DataFrame()
-        member_dict2 = {m["name"]: m["id"] for _, m in member_df2.iterrows()} if not member_df2.empty else {}
-        member_name2 = st.selectbox("Select Team Member", list(member_dict2.keys()) if member_dict2 else ["No Members"], key="sales_member")
+        member_name2 = st.selectbox("Select Team Member", list(member_dict.keys()) if member_dict else ["No Members"], key="sales_member")
         converted = st.number_input("Converted Leads", min_value=0, value=0)
         sales_value = st.number_input("Total Sales Value", min_value=0.0, value=0.0)
         date2 = st.date_input("Conversion Date", datetime.utcnow().date())
         submitted2 = st.form_submit_button("Update Sales")
 
-        if submitted2 and team_id2 and member_dict2.get(member_name2):
-            update_sales(team_id2, member_dict2.get(member_name2), converted, sales_value, date2)
+        if submitted2:
+            if selected_team_id and member_dict.get(member_name2):
+                update_sales(selected_team_id, member_dict.get(member_name2), converted, sales_value, date2)
+            else:
+                st.warning("⚠️ Please select a valid team and member.")
 
+    st.markdown("---")
+
+    # ✅ Today’s Summary Table
+    st.subheader("📊 Today's Summary")
+
+    if leads_df.empty or selected_team_id is None:
+        st.info("No leads found.")
+    else:
+        today = datetime.utcnow().date()
+        team_leads = leads_df[
+            (leads_df["team_id"] == selected_team_id)
+            & (leads_df["created_at"].dt.date == today)
+        ].copy()
+
+        if team_leads.empty:
+            st.info(f"No leads submitted today for team: {selected_team_name}")
+        else:
+            # Aggregate summary by member
+            summary = (
+                team_leads.groupby("owner_id")
+                .agg(
+                    Total_Leads=("id", "count"),
+                    Converted=("converted", "sum"),
+                    Total_Sales=("sales_value", "sum")
+                )
+                .reset_index()
+            )
+
+            summary["Conversion_%"] = (summary["Converted"] / summary["Total_Leads"] * 100).round(2)
+
+            # Merge with member names
+            summary = summary.merge(
+                users_df[["id", "name"]].rename(columns={"id": "owner_id", "name": "Member"}),
+                on="owner_id", how="left"
+            )[["Member", "Total_Leads", "Converted", "Total_Sales", "Conversion_%"]]
+
+            st.dataframe(summary, use_container_width=True)
 # ---------------------- Reporting ----------------------
 elif tab == "Reporting":
     st.header("📅 Reporting")
