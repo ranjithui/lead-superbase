@@ -280,16 +280,26 @@ elif tab == "Admin":
             )
 
             # calculate lead stats
-            team_leads = leads_df[leads_df["team_id"] == team_id]
-            lead_stats = (
-                team_leads.groupby("owner_id")
-                .agg(
-                    Lead_Count=("id", "count"),
-                    Converted=("converted", "sum"),
-                    Total_Sales=("sales_value", "sum"),
-                )
-                .reset_index()
-            )
+            # calculate lead stats safely
+if not leads_df.empty and "team_id" in leads_df.columns:
+    team_leads = leads_df[leads_df["team_id"] == team_id]
+else:
+    team_leads = pd.DataFrame(columns=["owner_id", "id", "converted", "sales_value"])
+
+if not team_leads.empty and "owner_id" in team_leads.columns:
+    lead_stats = (
+        team_leads.groupby("owner_id")
+        .agg(
+            Lead_Count=("id", "count"),
+            Converted=("converted", "sum"),
+            Total_Sales=("sales_value", "sum"),
+        )
+        .reset_index()
+    )
+else:
+    # create empty stats to avoid merge crash
+    lead_stats = pd.DataFrame(columns=["owner_id", "Lead_Count", "Converted", "Total_Sales"])
+
             team_view = team_members.merge(
                 lead_stats, left_on="id", right_on="owner_id", how="left"
             )[
