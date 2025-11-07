@@ -5,7 +5,7 @@ Features:
 1. Dashboard — show lead counts (team + individuals)
 2. Daily Upload — upload CSV or add single lead
 3. Reporting — weekly/monthly summary
-4. Admin Panel — create teams, add/update members with targets (form-based CRUD)
+4. Admin Panel — create teams, add/update members with targets (form-based CRUD + per-team summaries)
 
 Backend: Supabase (Postgres)
 Host: Streamlit Cloud
@@ -27,7 +27,6 @@ except Exception:
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
-BACKEND = "supabase"
 
 supabase: Client | None = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
@@ -162,7 +161,6 @@ elif tab == "Reporting":
         )
 
 # ---------------------- Admin ----------------------
-# ---------------------- Admin ----------------------
 elif tab == "Admin":
     st.header("🛠️ Admin Panel — Manage Teams & Members (Form-Based CRUD)")
     st.write("Create or update teams and members via forms. View each team's performance below.")
@@ -178,8 +176,7 @@ elif tab == "Admin":
         if not supabase:
             return pd.DataFrame()
         res = supabase.table("users").select("*").execute()
-        df = pd.DataFrame(res.data if hasattr(res, "data") else res)
-        return df
+        return pd.DataFrame(res.data if hasattr(res, "data") else res)
 
     def get_targets():
         if not supabase:
@@ -312,3 +309,5 @@ elif tab == "Admin":
 
             st.dataframe(team_view, use_container_width=True)
             st.markdown("---")
+
+# ---------------------- End of File ----------------------
