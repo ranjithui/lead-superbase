@@ -26,6 +26,7 @@ st.title("📊 Lead Management System")
 tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admin"])
 
 # ---------------------- Dashboard ----------------------
+# ---------------------- Dashboard ----------------------
 if tab == "Dashboard":
     st.header("📈 Team & Member Performance Dashboard")
     st.caption("View all teams and their members’ performance in one view.")
@@ -77,7 +78,83 @@ if tab == "Dashboard":
         lead_summary.rename(columns={"owner_id": "id"}), on="id", how="left"
     ).fillna(0)
 
-    # --- Display All Teams ---
+    # ======================================================
+    # 🔹 Top Summary Cards
+    # ======================================================
+    total_teams = len(teams_df)
+    total_members = len(users_df)
+    total_weekly_target = members["weekly_target"].sum()
+    total_monthly_target = members["monthly_target"].sum()
+    total_converted = members["converted"].sum()
+
+    overall_weekly_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
+    overall_monthly_progress = (total_converted / total_monthly_target * 100) if total_monthly_target > 0 else 0
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #00c6ff, #0072ff);
+                padding: 18px;
+                border-radius: 12px;
+                text-align: center;
+                color: white;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            ">
+                <h4>🏢 Total Teams</h4>
+                <h2 style="margin: 0;">{total_teams}</h2>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    with col2:
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #42e695, #3bb2b8);
+                padding: 18px;
+                border-radius: 12px;
+                text-align: center;
+                color: white;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            ">
+                <h4>👥 Total Members</h4>
+                <h2 style="margin: 0;">{total_members}</h2>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    with col3:
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #ff9966, #ff5e62);
+                padding: 18px;
+                border-radius: 12px;
+                text-align: center;
+                color: white;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            ">
+                <h4>🎯 Total Conversions</h4>
+                <h2 style="margin: 0;">{int(total_converted)}</h2>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    st.markdown("### 🚀 Overall Team Progress")
+
+    st.write("**Weekly Progress**")
+    st.progress(min(overall_weekly_progress / 100, 1.0))
+    st.write("**Monthly Progress**")
+    st.progress(min(overall_monthly_progress / 100, 1.0))
+
+    st.markdown("---")
+
+    # ======================================================
+    # 🔹 Per Team Cards
+    # ======================================================
     for _, team in teams_df.iterrows():
         team_name = team["name"]
         team_id = team["id"]
@@ -144,7 +221,9 @@ if tab == "Dashboard":
 
         st.markdown("---")
 
-    # --- Overall Summary ---
+    # ======================================================
+    # 🔹 Overall Summary
+    # ======================================================
     total_all_leads = members["total_leads"].sum()
     total_all_converted = members["converted"].sum()
     total_all_sales = members["total_sales"].sum()
@@ -165,7 +244,6 @@ if tab == "Dashboard":
         """,
         unsafe_allow_html=True,
     )
-
 
 # ---------------------- Daily Upload ----------------------
 # ---------------------- Daily Upload ----------------------
