@@ -2,10 +2,10 @@
 Lead Management Streamlit App
 ---------------------------------
 Features:
-1. Dashboard — show lead counts (team + individuals)
-2. Daily Upload — two forms: add daily leads + update conversions
-3. Reporting — weekly/monthly summary
-4. Admin Panel — create teams, add/update members with targets (CRUD + per-team tables)
+1. Dashboard — lead counts by team & members
+2. Daily Upload — add daily leads and update sales conversion
+3. Reporting — weekly and monthly summaries
+4. Admin Panel — create teams, manage members, assign targets, and view per-team data
 
 Backend: Supabase (Postgres)
 Host: Streamlit Cloud
@@ -85,7 +85,6 @@ if tab == "Dashboard":
 elif tab == "Daily Upload":
     st.header("📤 Daily Lead Update")
 
-    # helper functions
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
@@ -136,13 +135,12 @@ elif tab == "Daily Upload":
         except Exception as e:
             st.error(f"Error updating sales: {e}")
 
-    # fetch dropdown data
+    # Fetch team & user dropdowns
     teams_df = get_table("teams")
     users_df = get_table("users")
-
     team_dict = {row["name"]: row["id"] for _, row in teams_df.iterrows()} if not teams_df.empty else {}
 
-    # ---------------------- Form 1: Upload Leads ----------------------
+    # --- Form 1: Add Daily Leads ---
     st.subheader("📋 Add Daily Leads")
     with st.form("daily_leads_form"):
         team_name = st.selectbox("Select Team", list(team_dict.keys()) if team_dict else ["No Teams Found"])
@@ -159,7 +157,7 @@ elif tab == "Daily Upload":
 
     st.markdown("---")
 
-    # ---------------------- Form 2: Update Sales ----------------------
+    # --- Form 2: Update Sales ---
     st.subheader("💰 Update Sales Conversion")
     with st.form("update_sales_form"):
         team_name2 = st.selectbox("Select Team", list(team_dict.keys()) if team_dict else ["No Teams Found"], key="sales_team")
@@ -222,6 +220,105 @@ elif tab == "Reporting":
 
 # ---------------------- Admin ----------------------
 elif tab == "Admin":
-    # (Same as previous Admin panel with per-team tables)
-    st.header("🛠️ Admin Panel — Manage Teams & Members (Form-Based CRUD)")
-    # [Your working admin code from before goes here — unchanged]
+    st.header("🛠️ Admin Panel — Manage Teams & Members")
+
+    def get_table(name):
+        try:
+            res = supabase.table(name).select("*").execute()
+            return pd.DataFrame(res.data if hasattr(res, "data") else res)
+        except Exception:
+            return pd.DataFrame()
+
+    def create_team(name, description):
+        if not name:
+            return
+        tid = str(uuid.uuid4())
+        supabase.table("teams").insert({"id": tid, "name": name, "description": description}).execute()
+        st.success(f"Team '{name}' created!")
+
+    def create_or_update_member(uid, name, team_id, weekly, monthly):
+        if not name or not team_id:
+            return
+        if not uid:
+            uid = str(uuid.uuid4())
+            supabase.table("users").insert({"id": uid, "name": name, "team_id": team_id}).execute()
+        else:
+            supabase.table("users").update({"name": name, "team_id": team_id}).eq("id", uid).execute()
+        supabase.table("targets").upsert({"user_id": uid, "weekly": int(weekly), "monthly": int(monthly)}).execute()
+        st.success(f"Member '{name}' saved!")
+
+    st.subheader("Create Team")
+    with st.form("create_team_form", clear_on_submit=True):
+        team_name = st.text_input("Team Name")
+        team_desc = st.text_area("Description")
+        if st.form_submit_button("Create Team") and team_name:
+            create_team(team_name, team_desc)
+
+    st.subheader("Add or Update Member")
+    teams_df = get_table("teams")
+    team_opts = {r["name"]: r["id"] for _, r in teams_df.iterrows()} if not teams_df.empty else {}
+    with st.form("member_form", clear_on_submit=True):
+        uid = st.text_input("Member ID (blank for new)")
+        name = st.text_input("Member Name")
+        team_name = st.selectbox("Team", list(team_opts.keys()) if team_opts else [])
+        weekly = st.number_input("Weekly Target", 0)
+        monthly = st.number_input("Monthly Target", 0)
+        if st.form_submit_button("Save Member"):
+            if not team_opts:
+                st.warning("Create a team first.")
+            else:
+                create_or_update_member(uid, name, team_opts.get(team_name), weekly, monthly)
+
+    st.markdown("---")
+    st.subheader("Team Overview")
+
+    members_df = get_table("users")
+    targets_df = get_table("targets")
+    leads_df = get_table("leads")
+
+    if teams_df.empty:
+        st.info("No teams created yet.")
+    else:
+        for _, team in teams_df.iterrows():
+            team_id = team["id"]
+            team_name = team["name"]
+            st.markdown(f"### 🧩 Team: {team_name}")
+
+            team_members = members_df[members_df["team_id"] == team_id] if "team_id" in members_df.columns else pd.DataFrame()
+            if team_members.empty:
+                st.write("No members yet.")
+                continue
+
+            team_members = team_members.merge(targets_df, left_on="id", right_on="user_id", how="left")
+
+            team_leads = pd.DataFrame()
+            lead_stats = pd.DataFrame(columns=["owner_id", "Lead_Count", "Converted", "Total_Sales"])
+
+            if isinstance(leads_df, pd.DataFrame) and not leads_df.empty and "team_id" in leads_df.columns:
+                team_leads = leads_df[leads_df["team_id"] == team_id]
+                if not team_leads.empty and all(c in team_leads.columns for c in ["owner_id", "id", "converted", "sales_value"]):
+                    lead_stats = (
+                        team_leads.groupby("owner_id")
+                        .agg(
+                            Lead_Count=("id", "count"),
+                            Converted=("converted", "sum"),
+                            Total_Sales=("sales_value", "sum"),
+                        )
+                        .reset_index()
+                    )
+
+            merged = team_members.merge(lead_stats, left_on="id", right_on="owner_id", how="left")[
+                ["name", "weekly", "monthly", "Lead_Count", "Converted", "Total_Sales"]
+            ].fillna(0)
+
+            total_row = pd.DataFrame({
+                "name": ["TOTAL"],
+                "weekly": [merged["weekly"].sum()],
+                "monthly": [merged["monthly"].sum()],
+                "Lead_Count": [merged["Lead_Count"].sum()],
+                "Converted": [merged["Converted"].sum()],
+                "Total_Sales": [merged["Total_Sales"].sum()],
+            })
+            merged = pd.concat([merged, total_row], ignore_index=True)
+            st.dataframe(merged, use_container_width=True)
+            st.markdown("---")
