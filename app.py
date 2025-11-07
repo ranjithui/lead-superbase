@@ -282,7 +282,7 @@ elif tab == 'Admin':
 
     st.subheader("Targets (per user)")
     if not targets_df.empty:
-        targets_work = targets_df.copy()\        
+        targets_work = targets_df.copy()       
     else:
         targets_work = pd.DataFrame(columns=['user_id','weekly','monthly'])
 
