@@ -162,9 +162,10 @@ elif tab == "Reporting":
         )
 
 # ---------------------- Admin ----------------------
+# ---------------------- Admin ----------------------
 elif tab == "Admin":
     st.header("🛠️ Admin Panel — Manage Teams & Members (Form-Based CRUD)")
-    st.write("Create or update teams and members via forms. View all records below.")
+    st.write("Create or update teams and members via forms. View each team's performance below.")
 
     # ---------- Helper Functions ----------
     def get_teams():
@@ -178,21 +179,19 @@ elif tab == "Admin":
             return pd.DataFrame()
         res = supabase.table("users").select("*").execute()
         df = pd.DataFrame(res.data if hasattr(res, "data") else res)
-        teams = get_teams()
-        if not teams.empty and not df.empty:
-            df = df.merge(
-                teams[["id", "name"]],
-                left_on="team_id",
-                right_on="id",
-                how="left",
-                suffixes=("", "_team"),
-            )
-            df.rename(columns={"name_team": "team_name"}, inplace=True)
-        tgt_res = supabase.table("targets").select("*").execute()
-        targets = pd.DataFrame(tgt_res.data if hasattr(tgt_res, "data") else tgt_res)
-        if not targets.empty and not df.empty:
-            df = df.merge(targets, left_on="id", right_on="user_id", how="left")
         return df
+
+    def get_targets():
+        if not supabase:
+            return pd.DataFrame()
+        res = supabase.table("targets").select("*").execute()
+        return pd.DataFrame(res.data if hasattr(res, "data") else res)
+
+    def get_leads():
+        if not supabase:
+            return pd.DataFrame()
+        res = supabase.table("leads").select("*").execute()
+        return pd.DataFrame(res.data if hasattr(res, "data") else res)
 
     def create_team(name, description):
         if not name:
@@ -254,22 +253,62 @@ elif tab == "Admin":
 
     # ---------- Display Tables ----------
     st.markdown("---")
-    st.subheader("All Teams")
+    st.subheader("Teams Overview")
+
     teams_df = get_teams()
+    members_df = get_members()
+    targets_df = get_targets()
+    leads_df = get_leads()
+
     if teams_df.empty:
         st.info("No teams found.")
     else:
-        st.dataframe(teams_df[["id", "name", "description"]], use_container_width=True)
+        for _, team in teams_df.iterrows():
+            team_id = team["id"]
+            team_name = team["name"]
+            st.markdown(f"### 🧩 Team: {team_name}")
 
-    st.subheader("All Members")
-    members_df = get_members()
-    if members_df.empty:
-        st.info("No members found.")
-    else:
-        cols = ["id", "name", "team_name", "weekly", "monthly"]
-        for c in cols:
-            if c not in members_df.columns:
-                members_df[c] = ""
-        st.dataframe(members_df[cols], use_container_width=True)
+            # filter members for this team
+            team_members = members_df[members_df["team_id"] == team_id]
+            if team_members.empty:
+                st.write("No members in this team yet.")
+                continue
 
-# ---------------------- End of File ----------------------
+            # merge targets
+            team_members = team_members.merge(
+                targets_df,
+                left_on="id",
+                right_on="user_id",
+                how="left"
+            )
+
+            # calculate lead stats
+            team_leads = leads_df[leads_df["team_id"] == team_id]
+            lead_stats = (
+                team_leads.groupby("owner_id")
+                .agg(
+                    Lead_Count=("id", "count"),
+                    Converted=("converted", "sum"),
+                    Total_Sales=("sales_value", "sum"),
+                )
+                .reset_index()
+            )
+            team_view = team_members.merge(
+                lead_stats, left_on="id", right_on="owner_id", how="left"
+            )[
+                ["name", "weekly", "monthly", "Lead_Count", "Converted", "Total_Sales"]
+            ].fillna(0)
+
+            # totals
+            total_row = pd.DataFrame({
+                "name": ["TOTAL"],
+                "weekly": [team_view["weekly"].sum()],
+                "monthly": [team_view["monthly"].sum()],
+                "Lead_Count": [team_view["Lead_Count"].sum()],
+                "Converted": [team_view["Converted"].sum()],
+                "Total_Sales": [team_view["Total_Sales"].sum()],
+            })
+            team_view = pd.concat([team_view, total_row], ignore_index=True)
+
+            st.dataframe(team_view, use_container_width=True)
+            st.markdown("---")
