@@ -28,10 +28,10 @@ tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admi
 # ---------------------- Dashboard ----------------------
 # ---------------------- Dashboard ----------------------
 if tab == "Dashboard":
-    st.header("📈 Team & Member Performance Dashboard")
-    st.caption("View all teams and their members’ performance in one view.")
+    st.header("📊 Team & Member Performance Overview")
+    st.caption("Compact view of each team and their members’ performance.")
 
-    # --- Load Data from Supabase ---
+    # --- Load Data ---
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
@@ -41,8 +41,7 @@ if tab == "Dashboard":
             if "team_id" in df.columns:
                 df["team_id"] = df["team_id"].astype(str)
             return df
-        except Exception as e:
-            st.warning(f"⚠️ Failed to fetch {name}: {e}")
+        except Exception:
             return pd.DataFrame()
 
     teams_df = get_table("teams")
@@ -51,7 +50,7 @@ if tab == "Dashboard":
     leads_df = get_table("leads")
 
     if teams_df.empty:
-        st.info("No teams found. Please create some in the Admin Panel.")
+        st.info("No teams found. Please add some teams in the Admin panel.")
         st.stop()
 
     # --- Prepare Lead Summary ---
@@ -70,179 +69,119 @@ if tab == "Dashboard":
     members = users_df.merge(
         teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
         on="team_id", how="left"
-    )
-    members = members.merge(
+    ).merge(
         targets_df.rename(columns={"user_id": "id"}), on="id", how="left"
-    )
-    members = members.merge(
+    ).merge(
         lead_summary.rename(columns={"owner_id": "id"}), on="id", how="left"
     ).fillna(0)
 
-    # ======================================================
-    # 🔹 Top Summary Cards
-    # ======================================================
-    total_teams = len(teams_df)
-    total_members = len(users_df)
-    total_weekly_target = members["weekly_target"].sum()
-    total_monthly_target = members["monthly_target"].sum()
-    total_converted = members["converted"].sum()
-
-    overall_weekly_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
-    overall_monthly_progress = (total_converted / total_monthly_target * 100) if total_monthly_target > 0 else 0
-
+    # --- Small Top Summary ---
     col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown(
-            f"""
-            <div style="
-                background: linear-gradient(135deg, #00c6ff, #0072ff);
-                padding: 18px;
-                border-radius: 12px;
-                text-align: center;
-                color: white;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            ">
-                <h4>🏢 Total Teams</h4>
-                <h2 style="margin: 0;">{total_teams}</h2>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-    with col2:
-        st.markdown(
-            f"""
-            <div style="
-                background: linear-gradient(135deg, #42e695, #3bb2b8);
-                padding: 18px;
-                border-radius: 12px;
-                text-align: center;
-                color: white;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            ">
-                <h4>👥 Total Members</h4>
-                <h2 style="margin: 0;">{total_members}</h2>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-    with col3:
-        st.markdown(
-            f"""
-            <div style="
-                background: linear-gradient(135deg, #ff9966, #ff5e62);
-                padding: 18px;
-                border-radius: 12px;
-                text-align: center;
-                color: white;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            ">
-                <h4>🎯 Total Conversions</h4>
-                <h2 style="margin: 0;">{int(total_converted)}</h2>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-    st.markdown("### 🚀 Overall Team Progress")
-
-    st.write("**Weekly Progress**")
-    st.progress(min(overall_weekly_progress / 100, 1.0))
-    st.write("**Monthly Progress**")
-    st.progress(min(overall_monthly_progress / 100, 1.0))
+    col1.metric("🏢 Teams", len(teams_df))
+    col2.metric("👥 Members", len(users_df))
+    col3.metric("🎯 Total Conversions", int(members["converted"].sum()))
 
     st.markdown("---")
 
-    # ======================================================
-    # 🔹 Per Team Cards
-    # ======================================================
+    # --- Modern Compact Team Cards ---
     for _, team in teams_df.iterrows():
-        team_name = team["name"]
         team_id = team["id"]
+        team_name = team["name"]
         team_members = members[members["team_id"] == team_id]
 
         if team_members.empty:
             continue
 
         total_weekly_target = team_members["weekly_target"].sum()
-        total_monthly_target = team_members["monthly_target"].sum()
         total_converted = team_members["converted"].sum()
         total_sales = team_members["total_sales"].sum()
 
-        weekly_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
-        monthly_progress = (total_converted / total_monthly_target * 100) if total_monthly_target > 0 else 0
+        team_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
 
-        # --- Team Card ---
+        # --- Compact Team Card ---
         st.markdown(
             f"""
             <div style="
-                background: linear-gradient(135deg, #007bff, #004085);
-                color: white;
-                padding: 18px 22px;
-                border-radius: 14px;
-                margin-bottom: 15px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                background: #ffffff;
+                border: 1px solid #e0e0e0;
+                border-radius: 10px;
+                padding: 10px 14px;
+                margin-bottom: 10px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.05);
             ">
-                <h3 style="margin-bottom: 8px;">🏢 {team_name}</h3>
-                <div style="display:flex; justify-content: space-between;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <p style="margin:2px 0;">Weekly Target: <b>{int(total_weekly_target)}</b></p>
-                        <p style="margin:2px 0;">Monthly Target: <b>{int(total_monthly_target)}</b></p>
+                        <strong style="font-size:16px;">🏢 {team_name}</strong><br>
+                        <span style="font-size:12px; color:gray;">{len(team_members)} Members</span>
                     </div>
                     <div style="text-align:right;">
-                        <p style="margin:2px 0;">Converted: <b>{int(total_converted)}</b></p>
-                        <p style="margin:2px 0;">Sales: ₹{total_sales:,.2f}</p>
+                        <strong>{int(total_converted)}</strong> / {int(total_weekly_target)}  
+                        <div style="font-size:12px; color:gray;">Leads Converted</div>
                     </div>
                 </div>
+                <div style="margin-top:4px;">
+                    <div style="background:#eee; border-radius:4px; height:6px;">
+                        <div style="background:#007bff; width:{min(team_progress,100)}%; height:6px; border-radius:4px;"></div>
+                    </div>
+                    <div style="font-size:11px; color:gray; margin-top:2px;">Progress: {team_progress:.1f}% | ₹{total_sales:,.0f} Sales</div>
+                </div>
             </div>
-            """,
-            unsafe_allow_html=True,
+            """, unsafe_allow_html=True
         )
 
-        # --- Progress Bars ---
-        st.markdown("**🎯 Weekly Progress**")
-        st.progress(min(weekly_progress / 100, 1.0))
-        st.markdown("**📅 Monthly Progress**")
-        st.progress(min(monthly_progress / 100, 1.0))
+        # --- Inline Member Performance (Compact View) ---
+        for _, m in team_members.iterrows():
+            member_progress = (m["converted"] / m["weekly_target"] * 100) if m["weekly_target"] > 0 else 0
+            st.markdown(
+                f"""
+                <div style="
+                    background:#f9f9f9;
+                    border:1px solid #eee;
+                    border-radius:8px;
+                    padding:6px 10px;
+                    margin:4px 0 4px 20px;
+                ">
+                    <div style="display:flex; justify-content:space-between;">
+                        <div>
+                            <span style="font-weight:500;">👤 {m['name']}</span>
+                            <span style="font-size:11px; color:gray;"> — {int(m['converted'])}/{int(m['weekly_target'])} leads</span>
+                        </div>
+                        <div style="font-size:11px; color:gray;">₹{m['total_sales']:,.0f}</div>
+                    </div>
+                    <div style="background:#e9ecef; border-radius:4px; height:5px; margin-top:3px;">
+                        <div style="background:#28a745; width:{min(member_progress,100)}%; height:5px; border-radius:4px;"></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True
+            )
 
-        # --- Member Table ---
-        with st.expander(f"👥 {team_name} Members"):
-            display_df = team_members[[
-                "name", "weekly_target", "monthly_target",
-                "total_leads", "converted", "total_sales"
-            ]].rename(columns={
-                "name": "Member",
-                "weekly_target": "Weekly Target",
-                "monthly_target": "Monthly Target",
-                "total_leads": "Leads",
-                "converted": "Converted",
-                "total_sales": "Sales (₹)"
-            })
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.markdown("")
 
-        st.markdown("---")
+    # --- Overall Summary ---
+    total_leads = members["total_leads"].sum()
+    total_converted = members["converted"].sum()
+    total_sales = members["total_sales"].sum()
+    overall_progress = (total_converted / total_leads * 100) if total_leads > 0 else 0
 
-    # ======================================================
-    # 🔹 Overall Summary
-    # ======================================================
-    total_all_leads = members["total_leads"].sum()
-    total_all_converted = members["converted"].sum()
-    total_all_sales = members["total_sales"].sum()
-
+    st.markdown("---")
     st.markdown(
         f"""
         <div style="
-            background: #f8f9fa;
-            padding: 18px;
-            border-radius: 12px;
-            border: 1px solid #dee2e6;
-            margin-top: 30px;">
-            <h4>📈 Overall Performance Summary</h4>
-            <p>Total Leads: <b>{int(total_all_leads)}</b></p>
-            <p>Converted: <b>{int(total_all_converted)}</b></p>
-            <p>Total Sales: ₹{total_all_sales:,.2f}</p>
+            background:#f8f9fa;
+            padding:12px;
+            border-radius:10px;
+            border:1px solid #e0e0e0;
+            box-shadow:0 1px 4px rgba(0,0,0,0.05);
+        ">
+            <strong>📈 Overall Performance</strong><br>
+            Leads: <b>{int(total_leads)}</b> | Converted: <b>{int(total_converted)}</b> | Sales: ₹{total_sales:,.0f}
+            <div style="background:#ddd; border-radius:4px; height:6px; margin-top:4px;">
+                <div style="background:#17a2b8; width:{min(overall_progress,100)}%; height:6px; border-radius:4px;"></div>
+            </div>
+            <div style="font-size:11px; color:gray; margin-top:3px;">Total Conversion Rate: {overall_progress:.1f}%</div>
         </div>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
 # ---------------------- Daily Upload ----------------------
