@@ -297,9 +297,10 @@ elif tab == "Admin":
     import pandas as pd
     import streamlit as st
 
-    st.header("👑 Admin Panel – Manage Teams & Members")
+    st.header("👑 Admin Panel")
+    st.caption("Manage teams, members, and targets in one clean dashboard.")
 
-    # ✅ Helper function to fetch tables
+    # ---------- Helper: Load Table ----------
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
@@ -313,109 +314,112 @@ elif tab == "Admin":
             st.warning(f"⚠️ Error loading {name}: {e}")
             return pd.DataFrame()
 
-    # Load all data
+    # ---------- Load Data ----------
     teams_df = get_table("teams")
     users_df = get_table("users")
     targets_df = get_table("targets")
 
-    # ---------------- Create Team ----------------
-    st.subheader("➕ Create Team")
-    with st.form("create_team_form"):
-        team_name = st.text_input("Team Name")
-        team_description = st.text_area("Description")
-        submitted = st.form_submit_button("Create Team")
+    st.markdown("### 🏢 Create New Team")
+    with st.container(border=True):
+        with st.form("create_team_form", clear_on_submit=True):
+            c1, c2 = st.columns([2, 3])
+            team_name = c1.text_input("Team Name")
+            team_description = c2.text_area("Description", height=70)
+            submitted = st.form_submit_button("➕ Add Team", use_container_width=True)
 
-        if submitted:
-            if team_name:
-                try:
-                    supabase.table("teams").insert({
-                        "name": team_name,
-                        "description": team_description
-                    }).execute()
-                    st.success(f"✅ Team '{team_name}' created.")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error creating team: {e}")
-            else:
-                st.warning("⚠️ Team name is required.")
+            if submitted:
+                if team_name:
+                    try:
+                        supabase.table("teams").insert({
+                            "name": team_name,
+                            "description": team_description
+                        }).execute()
+                        st.success(f"✅ Team '{team_name}' created.")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error(f"Error creating team: {e}")
+                else:
+                    st.warning("⚠️ Team name is required.")
 
     st.markdown("---")
 
-    # ---------------- Display Teams ----------------
-    st.subheader("🏢 Teams List")
+    # ---------- Display Teams ----------
+    st.markdown("### 👥 Teams Overview")
     if teams_df.empty:
-        st.info("No teams found.")
+        st.info("No teams yet. Add one above!")
     else:
         for _, team in teams_df.iterrows():
-            with st.expander(f"🏷 {team['name']}"):
+            with st.container(border=True):
+                st.markdown(f"#### 🏷️ {team['name']}")
                 st.write(f"**Description:** {team.get('description', '—')}")
-                col1, col2 = st.columns(2)
+                st.write(f"**Team ID:** `{team['id']}`")
 
+                col1, col2 = st.columns([1, 3])
                 with col1:
-                    if st.button("🗑 Delete Team", key=f"del_team_{team['id']}"):
+                    if st.button("🗑 Delete Team", key=f"del_team_{team['id']}", use_container_width=True):
                         try:
                             supabase.table("teams").delete().eq("id", team["id"]).execute()
-                            st.success(f"✅ Deleted team {team['name']}")
+                            st.success(f"✅ Deleted {team['name']}")
                             st.experimental_rerun()
                         except Exception as e:
                             st.error(f"Error deleting team: {e}")
-
                 with col2:
-                    st.write(f"Team ID: `{team['id']}`")
+                    st.caption("Deleting a team will not remove its members automatically.")
 
     st.markdown("---")
 
-    # ---------------- Add Member ----------------
-    st.subheader("👤 Add Member")
+    # ---------- Add Member ----------
+    st.markdown("### ➕ Add New Member")
     team_options = {row["name"]: row["id"] for _, row in teams_df.iterrows()} if not teams_df.empty else {}
 
-    with st.form("add_member_form"):
-        member_name = st.text_input("Member Name")
-        team_choice = st.selectbox("Select Team", list(team_options.keys()) if team_options else ["No Teams"])
-        target_weekly = st.number_input("Weekly Target", min_value=0, value=0)
-        target_monthly = st.number_input("Monthly Target", min_value=0, value=0)
-        submitted = st.form_submit_button("Add Member")
+    with st.container(border=True):
+        with st.form("add_member_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            member_name = c1.text_input("Member Name")
+            team_choice = c2.selectbox("Select Team", list(team_options.keys()) if team_options else ["No Teams"])
 
-        if submitted:
-            if member_name and team_options:
-                try:
-                    team_id = team_options.get(team_choice)
-                    user_res = supabase.table("users").insert({
-                        "name": member_name,
-                        "team_id": team_id
-                    }).execute()
+            c3, c4 = st.columns(2)
+            target_weekly = c3.number_input("Weekly Target", min_value=0, value=0)
+            target_monthly = c4.number_input("Monthly Target", min_value=0, value=0)
+            submitted = st.form_submit_button("👤 Add Member", use_container_width=True)
 
-                    # Create target record
-                    user_id = user_res.data[0]["id"] if user_res.data else None
-                    if user_id:
-                        supabase.table("targets").insert({
-                            "user_id": user_id,
-                            "weekly_target": target_weekly,
-                            "monthly_target": target_monthly
+            if submitted:
+                if member_name and team_options:
+                    try:
+                        team_id = team_options.get(team_choice)
+                        user_res = supabase.table("users").insert({
+                            "name": member_name,
+                            "team_id": team_id
                         }).execute()
 
-                    st.success(f"✅ Member '{member_name}' added to {team_choice}.")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error adding member: {e}")
-            else:
-                st.warning("⚠️ Please fill out all fields.")
+                        user_id = user_res.data[0]["id"] if user_res.data else None
+                        if user_id:
+                            supabase.table("targets").insert({
+                                "user_id": user_id,
+                                "weekly_target": target_weekly,
+                                "monthly_target": target_monthly
+                            }).execute()
+
+                        st.success(f"✅ Member '{member_name}' added to {team_choice}.")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error(f"Error adding member: {e}")
+                else:
+                    st.warning("⚠️ Please fill out all fields.")
 
     st.markdown("---")
 
-    # ---------------- Manage Members (CRUD + Update Targets) ----------------
-    st.subheader("👥 Manage Members")
+    # ---------- Manage Members ----------
+    st.markdown("### 🧑‍💼 Manage Members")
 
     if users_df.empty:
         st.info("No members found.")
     else:
-        # Merge user → team names
         users_df = users_df.merge(
             teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
             on="team_id", how="left"
         )
 
-        # Merge user → targets
         if not targets_df.empty:
             users_df = users_df.merge(
                 targets_df.rename(columns={
@@ -427,12 +431,15 @@ elif tab == "Admin":
             )
 
         for _, member in users_df.iterrows():
-            with st.expander(f"👤 {member['name']} ({member.get('team_name', 'No Team')})"):
-                col1, col2, col3 = st.columns([1, 1, 2])
+            with st.container(border=True):
+                st.markdown(f"#### 👤 {member['name']} ({member.get('team_name', 'No Team')})")
+                st.caption(f"Member ID: `{member['id']}`")
 
-                # -------- Delete Member --------
-                with col1:
-                    if st.button("🗑 Delete", key=f"del_member_{member['id']}"):
+                c1, c2, c3 = st.columns([1, 1, 2])
+
+                # --- Delete ---
+                with c1:
+                    if st.button("🗑 Delete", key=f"del_member_{member['id']}", use_container_width=True):
                         try:
                             supabase.table("users").delete().eq("id", member["id"]).execute()
                             st.success(f"✅ Deleted {member['name']}")
@@ -440,15 +447,15 @@ elif tab == "Admin":
                         except Exception as e:
                             st.error(f"Error deleting member: {e}")
 
-                # -------- Move Member --------
-                with col2:
+                # --- Move Member ---
+                with c2:
                     move_team = st.selectbox(
                         "Move to Team",
                         list(team_options.keys()) if team_options else ["No Teams"],
                         index=list(team_options.keys()).index(member["team_name"]) if member["team_name"] in team_options else 0,
                         key=f"move_{member['id']}"
                     )
-                    if st.button("🔁 Move", key=f"move_btn_{member['id']}"):
+                    if st.button("🔁 Move", key=f"move_btn_{member['id']}", use_container_width=True):
                         try:
                             new_team_id = team_options[move_team]
                             supabase.table("users").update({"team_id": new_team_id}).eq("id", member["id"]).execute()
@@ -457,30 +464,31 @@ elif tab == "Admin":
                         except Exception as e:
                             st.error(f"Error moving member: {e}")
 
-                # -------- Info --------
-                with col3:
+                # --- Current Info ---
+                with c3:
                     st.write(f"**Current Team:** {member.get('team_name', '—')}")
-                    st.write(f"**Member ID:** `{member['id']}`")
+                    st.write(f"**Weekly Target:** {int(member.get('Weekly_Target', 0))}")
+                    st.write(f"**Monthly Target:** {int(member.get('Monthly_Target', 0))}")
 
-                st.markdown("---")
+                st.divider()
 
-                # -------- Update Targets --------
-                st.write("🎯 **Update Weekly / Monthly Target**")
+                # --- Update Targets Form ---
+                st.write("🎯 **Update Targets**")
                 current_weekly = int(member.get("Weekly_Target", 0))
                 current_monthly = int(member.get("Monthly_Target", 0))
 
                 with st.form(f"update_target_form_{member['id']}"):
-                    new_weekly = st.number_input(
+                    col_w, col_m = st.columns(2)
+                    new_weekly = col_w.number_input(
                         "Weekly Target", min_value=0, value=current_weekly, key=f"wk_{member['id']}"
                     )
-                    new_monthly = st.number_input(
+                    new_monthly = col_m.number_input(
                         "Monthly Target", min_value=0, value=current_monthly, key=f"mn_{member['id']}"
                     )
-                    submit_target = st.form_submit_button("💾 Update Targets")
+                    submit_target = st.form_submit_button("💾 Save Changes")
 
                     if submit_target:
                         try:
-                            # Check if target exists for this user
                             target_row = targets_df[targets_df["user_id"] == member["id"]]
                             if not target_row.empty:
                                 supabase.table("targets").update({
@@ -494,5 +502,7 @@ elif tab == "Admin":
                                     "monthly_target": new_monthly
                                 }).execute()
                             st.success(f"✅ Updated targets for {member['name']}")
+                            st.experimental_rerun()
                         except Exception as e:
                             st.error(f"Error updating targets: {e}")
+
