@@ -26,12 +26,12 @@ st.title("📊 Lead Management System")
 tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admin"])
 
 # ---------------------- Dashboard ----------------------
-# ---------------------- Dashboard ----------------------
+# ---------------------- DASHBOARD SECTION ----------------------
 if tab == "Dashboard":
     st.header("📊 Team & Member Performance Overview")
-    st.caption("Compact view of each team and their members’ performance.")
+    st.caption("Modern compact dashboard showing weekly & monthly progress for teams and members.")
 
-    # --- Load Data ---
+    # --- Load Data from Supabase ---
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
@@ -65,7 +65,7 @@ if tab == "Dashboard":
     else:
         lead_summary = pd.DataFrame(columns=["owner_id", "total_leads", "converted", "total_sales"])
 
-    # --- Merge Data ---
+    # --- Merge All Data ---
     members = users_df.merge(
         teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
         on="team_id", how="left"
@@ -83,7 +83,16 @@ if tab == "Dashboard":
 
     st.markdown("---")
 
-    # --- Modern Compact Team Cards ---
+    # --- Helper: Color by Progress ---
+    def get_color(pct):
+        if pct >= 80:
+            return "#28a745"  # Green
+        elif pct >= 50:
+            return "#ffc107"  # Yellow
+        else:
+            return "#dc3545"  # Red
+
+    # --- Compact Team & Member Cards ---
     for _, team in teams_df.iterrows():
         team_id = team["id"]
         team_name = team["name"]
@@ -93,16 +102,21 @@ if tab == "Dashboard":
             continue
 
         total_weekly_target = team_members["weekly_target"].sum()
+        total_monthly_target = team_members["monthly_target"].sum()
         total_converted = team_members["converted"].sum()
         total_sales = team_members["total_sales"].sum()
 
-        team_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
+        team_weekly_progress = (total_converted / total_weekly_target * 100) if total_weekly_target > 0 else 0
+        team_monthly_progress = (total_converted / total_monthly_target * 100) if total_monthly_target > 0 else 0
 
-        # --- Compact Team Card ---
+        weekly_color = get_color(team_weekly_progress)
+        monthly_color = get_color(team_monthly_progress)
+
+        # --- Team Card ---
         st.markdown(
             f"""
             <div style="
-                background: #ffffff;
+                background: #fff;
                 border: 1px solid #e0e0e0;
                 border-radius: 10px;
                 padding: 10px 14px;
@@ -116,22 +130,40 @@ if tab == "Dashboard":
                     </div>
                     <div style="text-align:right;">
                         <strong>{int(total_converted)}</strong> / {int(total_weekly_target)}  
-                        <div style="font-size:12px; color:gray;">Leads Converted</div>
+                        <div style="font-size:12px; color:gray;">Converted</div>
                     </div>
                 </div>
-                <div style="margin-top:4px;">
+
+                <!-- Weekly Progress -->
+                <div style="margin-top:6px;">
+                    <div style="font-size:11px; color:gray;">Weekly Progress</div>
                     <div style="background:#eee; border-radius:4px; height:6px;">
-                        <div style="background:#007bff; width:{min(team_progress,100)}%; height:6px; border-radius:4px;"></div>
+                        <div style="background:{weekly_color}; width:{min(team_weekly_progress,100)}%; height:6px; border-radius:4px;"></div>
                     </div>
-                    <div style="font-size:11px; color:gray; margin-top:2px;">Progress: {team_progress:.1f}% | ₹{total_sales:,.0f} Sales</div>
                 </div>
+
+                <!-- Monthly Progress -->
+                <div style="margin-top:4px;">
+                    <div style="font-size:11px; color:gray;">Monthly Progress</div>
+                    <div style="background:#eee; border-radius:4px; height:6px;">
+                        <div style="background:{monthly_color}; width:{min(team_monthly_progress,100)}%; height:6px; border-radius:4px;"></div>
+                    </div>
+                </div>
+
+                <div style="font-size:11px; color:gray; margin-top:4px;">Total Sales: ₹{total_sales:,.0f}</div>
             </div>
-            """, unsafe_allow_html=True
+            """,
+            unsafe_allow_html=True
         )
 
-        # --- Inline Member Performance (Compact View) ---
+        # --- Member Cards (Compact) ---
         for _, m in team_members.iterrows():
-            member_progress = (m["converted"] / m["weekly_target"] * 100) if m["weekly_target"] > 0 else 0
+            weekly_progress = (m["converted"] / m["weekly_target"] * 100) if m["weekly_target"] > 0 else 0
+            monthly_progress = (m["converted"] / m["monthly_target"] * 100) if m["monthly_target"] > 0 else 0
+
+            weekly_color = get_color(weekly_progress)
+            monthly_color = get_color(monthly_progress)
+
             st.markdown(
                 f"""
                 <div style="
@@ -144,18 +176,26 @@ if tab == "Dashboard":
                     <div style="display:flex; justify-content:space-between;">
                         <div>
                             <span style="font-weight:500;">👤 {m['name']}</span>
-                            <span style="font-size:11px; color:gray;"> — {int(m['converted'])}/{int(m['weekly_target'])} leads</span>
+                            <span style="font-size:11px; color:gray;"> — {int(m['converted'])}/{int(m['weekly_target'])} weekly</span>
                         </div>
                         <div style="font-size:11px; color:gray;">₹{m['total_sales']:,.0f}</div>
                     </div>
-                    <div style="background:#e9ecef; border-radius:4px; height:5px; margin-top:3px;">
-                        <div style="background:#28a745; width:{min(member_progress,100)}%; height:5px; border-radius:4px;"></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True
-            )
 
-        st.markdown("")
+                    <!-- Weekly -->
+                    <div style="background:#e9ecef; border-radius:4px; height:5px; margin-top:3px;">
+                        <div style="background:{weekly_color}; width:{min(weekly_progress,100)}%; height:5px; border-radius:4px;"></div>
+                    </div>
+                    <div style="font-size:10px; color:gray;">Weekly: {weekly_progress:.1f}%</div>
+
+                    <!-- Monthly -->
+                    <div style="background:#e9ecef; border-radius:4px; height:5px; margin-top:3px;">
+                        <div style="background:{monthly_color}; width:{min(monthly_progress,100)}%; height:5px; border-radius:4px;"></div>
+                    </div>
+                    <div style="font-size:10px; color:gray;">Monthly: {monthly_progress:.1f}%</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
     # --- Overall Summary ---
     total_leads = members["total_leads"].sum()
@@ -176,9 +216,9 @@ if tab == "Dashboard":
             <strong>📈 Overall Performance</strong><br>
             Leads: <b>{int(total_leads)}</b> | Converted: <b>{int(total_converted)}</b> | Sales: ₹{total_sales:,.0f}
             <div style="background:#ddd; border-radius:4px; height:6px; margin-top:4px;">
-                <div style="background:#17a2b8; width:{min(overall_progress,100)}%; height:6px; border-radius:4px;"></div>
+                <div style="background:{get_color(overall_progress)}; width:{min(overall_progress,100)}%; height:6px; border-radius:4px;"></div>
             </div>
-            <div style="font-size:11px; color:gray; margin-top:3px;">Total Conversion Rate: {overall_progress:.1f}%</div>
+            <div style="font-size:11px; color:gray; margin-top:3px;">Conversion Rate: {overall_progress:.1f}%</div>
         </div>
         """,
         unsafe_allow_html=True
