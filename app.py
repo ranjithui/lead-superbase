@@ -1,15 +1,5 @@
 Lead Management Streamlit App
 ---------------------------------
-Features:
-1. Dashboard — all teams & members with progress cards
-2. Daily Upload — add daily leads and update sales conversion
-3. Reporting — weekly and monthly summaries
-4. Admin Panel — create teams, manage members, assign targets, and view per-team data
-
-Backend: Supabase (Postgres)
-Host: Streamlit Cloud
-"""
-
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
