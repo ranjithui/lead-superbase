@@ -444,18 +444,18 @@ elif tab == "Reporting":
 
 
 # ---------------------- Admin ----------------------
-# ---------------------- Admin ----------------------
+# ---------------------- ADMIN PANEL ----------------------
 elif tab == "Admin":
+    import uuid
     st.header("👑 Admin Panel")
     st.caption("Manage teams, members, and their targets efficiently")
-
-    import uuid  # for generating unique IDs
 
     # ---------- Helper: Load Table ----------
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
-            df = pd.DataFrame(res.data if hasattr(res, "data") else res)
+            data = res.data if hasattr(res, "data") and res.data else []
+            df = pd.DataFrame(data)
             if not df.empty:
                 if "id" in df.columns:
                     df["id"] = df["id"].astype(str)
@@ -539,17 +539,15 @@ elif tab == "Admin":
                 if member_name and team_options:
                     try:
                         team_id = team_options.get(team_choice)
-                        user_id = str(uuid.uuid4())  # ✅ generate UUID manually
-
-                        # Insert new user
+                        user_id = str(uuid.uuid4())
                         supabase.table("users").insert({
                             "id": user_id,
                             "name": member_name,
                             "team_id": team_id
                         }).execute()
 
-                        # Create their target record
                         supabase.table("targets").insert({
+                            "id": str(uuid.uuid4()),
                             "user_id": user_id,
                             "weekly_target": target_weekly,
                             "monthly_target": target_monthly
@@ -570,22 +568,29 @@ elif tab == "Admin":
     if teams_df.empty:
         st.info("No teams found.")
     else:
-        # Merge users with targets
-        users_targets = pd.DataFrame()
+        # Merge users with targets safely
         if not users_df.empty and not targets_df.empty:
             merged_targets = targets_df.rename(columns={
-                "user_id": "id",
                 "weekly_target": "Weekly_Target",
                 "monthly_target": "Monthly_Target"
             })
-            users_targets = users_df.merge(merged_targets, on="id", how="left")
+            users_targets = users_df.merge(
+                merged_targets,
+                left_on="id",
+                right_on="user_id",
+                how="left"
+            )
+        else:
+            users_targets = users_df.copy()
+            users_targets["Weekly_Target"] = 0
+            users_targets["Monthly_Target"] = 0
 
         # Loop through each team
         for _, team in teams_df.iterrows():
             team_id = team["id"]
             team_name = team["name"]
 
-            team_members = users_targets[users_targets["team_id"] == team_id] if not users_targets.empty else pd.DataFrame()
+            team_members = users_targets[users_targets["team_id"] == team_id]
 
             # Calculate team total target
             team_weekly_target = team_members["Weekly_Target"].sum() if not team_members.empty else 0
@@ -651,8 +656,8 @@ elif tab == "Admin":
                         # --- Delete Member Button ---
                         if col4.button("🗑 Delete", key=f"delete_{member['id']}"):
                             try:
-                                supabase.table("targets").delete().eq("user_id", member["id"]).execute()
                                 supabase.table("users").delete().eq("id", member["id"]).execute()
+                                supabase.table("targets").delete().eq("user_id", member["id"]).execute()
                                 st.success(f"✅ Deleted {member['name']}.")
                                 st.experimental_rerun()
                             except Exception as e:
