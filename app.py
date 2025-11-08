@@ -37,16 +37,15 @@ if tab == "Dashboard":
             res = supabase.table(name).select("*").execute()
             df = pd.DataFrame(res.data if hasattr(res, "data") else res)
             if not df.empty:
-                if "id" in df.columns:
-                    df["id"] = df["id"].astype(str)
-                if "team_id" in df.columns:
-                    df["team_id"] = df["team_id"].astype(str)
+                for col in ["id", "team_id", "user_id"]:
+                    if col in df.columns:
+                        df[col] = df[col].astype(str)
             return df
         except Exception as e:
             st.warning(f"⚠️ Failed to load {name}: {e}")
             return pd.DataFrame()
 
-    # --- Load tables ---
+    # --- Load all tables ---
     teams_df = get_table("teams")
     users_df = get_table("users")
     targets_df = get_table("targets")
@@ -82,9 +81,12 @@ if tab == "Dashboard":
     members = users_df.merge(
         teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
         on="team_id", how="left"
-    ).merge(
-        targets_df.rename(columns={"user_id": "id"}), on="id", how="left"
-    ).fillna(0)
+    )
+    if not targets_df.empty:
+        members = members.merge(
+            targets_df.rename(columns={"user_id": "id"}), on="id", how="left"
+        )
+    members["weekly_target"] = members.get("weekly_target", 0).fillna(0)
 
     # --- Summary Header ---
     col1, col2, col3 = st.columns(3)
@@ -106,28 +108,31 @@ if tab == "Dashboard":
         st.subheader(f"🏢 {team_name}")
 
         # --- Team-level weekly totals ---
-        team_leads = lead_summary[lead_summary["owner_id"].isin(team_members["id"]) & (lead_summary["week"] == current_week)]
-        total_converted = team_leads["converted"].sum()
-        total_sales = team_leads["total_sales"].sum()
-        total_target = team_members["weekly_target"].sum()
+        team_leads = lead_summary[
+            (lead_summary["owner_id"].isin(team_members["id"])) &
+            (lead_summary["week"] == current_week)
+        ]
+
+        # --- Safe calculations ---
+        total_converted = float(team_leads["converted"].sum() if "converted" in team_leads else 0)
+        total_sales = float(team_leads["total_sales"].sum() if "total_sales" in team_leads else 0)
+        total_target = float(team_members["weekly_target"].sum() if "weekly_target" in team_members else 0)
 
         progress = (total_converted / total_target * 100) if total_target > 0 else 0
 
         st.progress(min(progress / 100, 1.0))
         st.caption(f"🎯 Progress: {progress:.1f}% — Converted {int(total_converted)}/{int(total_target)} leads — ₹{total_sales:,.0f}")
 
-        # --- Carry Forward Logic ---
-        if progress < 100:
-            # Check if we already logged a note this week
-            note_exists = (
-                not notes_df[
-                    (notes_df["team_id"] == team_id) &
-                    (notes_df["week"] == current_week)
-                ].empty
-            )
-            if not note_exists:
+        # --- Carry Forward Logic (safe) ---
+        if total_target > 0 and progress < 100:
+            incomplete = max(total_target - total_converted, 0)
+            note_exists = not notes_df[
+                (notes_df["team_id"] == team_id) & (notes_df["week"] == current_week)
+            ].empty
+
+            if not note_exists and incomplete > 0:
                 try:
-                    note_text = f"Carried forward {int(total_target - total_converted)} incomplete leads to next week."
+                    note_text = f"Carried forward {int(incomplete)} incomplete leads to next week."
                     supabase.table("notes").insert({
                         "team_id": team_id,
                         "note": note_text,
@@ -151,9 +156,10 @@ if tab == "Dashboard":
         st.markdown("### 👥 Team Members")
         for _, member in team_members.iterrows():
             m_id = member["id"]
-            m_target = member.get("weekly_target", 0)
+            m_target = float(member.get("weekly_target", 0))
             m_leads = lead_summary[
-                (lead_summary["owner_id"] == m_id) & (lead_summary["week"] == current_week)
+                (lead_summary["owner_id"] == m_id) &
+                (lead_summary["week"] == current_week)
             ]
             converted = int(m_leads["converted"].sum()) if not m_leads.empty else 0
             sales = float(m_leads["total_sales"].sum()) if not m_leads.empty else 0
@@ -191,6 +197,7 @@ if tab == "Dashboard":
     st.subheader("📈 Overall Company Summary")
     st.progress(min(overall_progress / 100, 1.0))
     st.caption(f"Total Leads: {int(total_leads)} | Converted: {int(total_converted)} | Sales: ₹{total_sales:,.0f} | Conversion Rate: {overall_progress:.1f}%")
+
 
 # ---------------------- Daily Upload ----------------------
 # ---------------------- Daily Upload ----------------------
