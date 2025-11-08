@@ -26,167 +26,149 @@ st.title("📊 Lead Management System")
 tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admin"])
 
 # ---------------------- Dashboard ----------------------
-# ---------------------- DASHBOARD ----------------------
-elif tab == "Dashboard":
+# ---------------------- Dashboard ----------------------
+if tab == "Dashboard":
     st.header("📊 Performance Dashboard")
-    st.caption("Track weekly progress, carry forward incomplete targets, and view automatic reminders")
+    st.caption("Track weekly progress, carry forward incomplete targets, and view automatic notes")
 
     # ---------- Helper ----------
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
             df = pd.DataFrame(res.data if hasattr(res, "data") else res)
-            return df if not df.empty else pd.DataFrame()
+            if not df.empty and "id" in df.columns:
+                df["id"] = df["id"].astype(str)
+            if "team_id" in df.columns:
+                df["team_id"] = df["team_id"].astype(str)
+            return df
         except Exception as e:
             st.warning(f"⚠️ Error loading {name}: {e}")
             return pd.DataFrame()
 
     # ---------- Load Data ----------
-    users_df = get_table("users")
     teams_df = get_table("teams")
+    users_df = get_table("users")
     targets_df = get_table("targets")
-    progress_df = get_table("progress")  # user_id, week, achieved
-    notes_df = get_table("notes")        # user_id, week, note, auto (bool), timestamp
+    leads_df = get_table("leads")
+    notes_df = get_table("notes")  # optional table for auto notes
 
-    # ---------- Current User ----------
-    user = st.session_state.get("current_user")
-    if not user:
-        st.warning("Please log in to see your dashboard.")
+    if teams_df.empty or users_df.empty:
+        st.info("Please add teams and members in the Admin panel first.")
         st.stop()
 
-    user_id = user.get("id")
-    user_name = user.get("name", "Unknown")
+    # ---------- Aggregate Lead & Target Data ----------
+    leads_df["converted"] = leads_df.get("converted", False)
+    leads_df["sales_value"] = leads_df.get("sales_value", 0)
 
-    # ---------- Team & Target Info ----------
-    user_team = users_df.loc[users_df["id"] == user_id, "team_id"].values[0] if not users_df.empty else None
-    team_name = teams_df.loc[teams_df["id"] == user_team, "name"].values[0] if not teams_df.empty and user_team else "Unassigned"
+    lead_summary = leads_df.groupby("owner_id").agg(
+        total_leads=("id", "count"),
+        converted=("converted", "sum"),
+        total_sales=("sales_value", "sum")
+    ).reset_index() if not leads_df.empty else pd.DataFrame(columns=["owner_id", "total_leads", "converted", "total_sales"])
 
-    target_row = targets_df[targets_df["user_id"] == user_id]
-    weekly_target = int(target_row["weekly_target"].values[0]) if not target_row.empty else 0
-    monthly_target = int(target_row["monthly_target"].values[0]) if not target_row.empty else 0
+    members = (
+        users_df
+        .merge(teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}), on="team_id", how="left")
+        .merge(targets_df.rename(columns={"user_id": "id"}), on="id", how="left")
+        .merge(lead_summary.rename(columns={"owner_id": "id"}), on="id", how="left")
+        .fillna(0)
+    )
 
-    # ---------- Date / Week Context ----------
-    today = pd.Timestamp.now()
-    current_week = today.isocalendar().week
-    month_start_week = pd.Timestamp(today.year, today.month, 1).isocalendar().week
-    total_weeks_in_month = 4
-
-    # ---------- Progress Summary ----------
-    achieved_total = progress_df[progress_df["user_id"] == user_id]["achieved"].sum() if not progress_df.empty else 0
-    overall_progress = min(achieved_total / monthly_target, 1.0) if monthly_target else 0
-
-    # ---------- Split Layout ----------
+    # ---------- Layout Split ----------
     left, right = st.columns([1, 1])
 
     with left:
-        st.subheader("📈 Overview")
-        st.metric("Team", team_name)
-        st.metric("Member", user_name)
-        st.metric("Monthly Target", monthly_target)
-        st.metric("Achieved", achieved_total)
+        st.subheader("🏢 Overall Summary")
+        total_leads = members["total_leads"].sum()
+        total_converted = members["converted"].sum()
+        total_sales = members["total_sales"].sum()
+        overall_progress = (total_converted / total_leads) if total_leads > 0 else 0
+
+        st.metric("Teams", len(teams_df))
+        st.metric("Members", len(users_df))
         st.progress(overall_progress)
 
-    with right:
-        st.subheader("📅 Weekly Breakdown")
+        st.caption(f"Total Leads: {int(total_leads)} | Converted: {int(total_converted)} | Sales ₹{total_sales:,.0f}")
 
-        weeks = [month_start_week + i for i in range(total_weeks_in_month)]
-        week_data = []
+    with right:
+        st.subheader("🗓 Weekly Target Progress")
+        today = pd.Timestamp.now()
+        current_week = today.isocalendar().week
+        total_weeks = 4
+        start_week = current_week - total_weeks + 1
+
+        weekly_data = []
         carry_forward = 0
 
-        for week in weeks:
-            achieved = progress_df[
-                (progress_df["user_id"] == user_id) &
-                (progress_df["week"] == week)
-            ]["achieved"].sum() if not progress_df.empty else 0
-
-            target_with_carry = weekly_target + carry_forward
-            shortfall = max(0, target_with_carry - achieved)
+        for week in range(start_week, current_week + 1):
+            week_achieved = members["converted"].sum() // total_weeks  # distribute conversion approx evenly
+            weekly_target = members["weekly_target"].sum() + carry_forward
+            shortfall = max(0, weekly_target - week_achieved)
             carry_forward = shortfall
 
-            progress = min(achieved / target_with_carry, 1.0) if target_with_carry else 0
+            progress_ratio = min(week_achieved / weekly_target, 1) if weekly_target > 0 else 0
+            weekly_data.append({
+                "Week": week,
+                "Target": weekly_target,
+                "Achieved": week_achieved,
+                "Shortfall": shortfall,
+                "Progress": progress_ratio
+            })
 
-            # ---------------- AUTO NOTES LOGIC ----------------
-            auto_note = None
-            if achieved >= target_with_carry and target_with_carry > 0:
-                auto_note = "✅ Great job! You achieved your weekly target!"
-            elif shortfall > 0 and achieved > 0:
-                auto_note = f"⚠️ You achieved {achieved}/{target_with_carry}. The remaining {shortfall} will carry forward."
-            elif achieved == 0:
-                auto_note = f"🔴 No progress logged this week. {target_with_carry} will carry forward."
-            elif carry_forward > 0:
-                auto_note = f"📈 Your target increased this week due to earlier shortfall."
+            # --- Auto Notes ---
+            note_text = ""
+            if week_achieved >= weekly_target and weekly_target > 0:
+                note_text = "✅ Great job! Weekly target achieved."
+            elif week_achieved > 0 and shortfall > 0:
+                note_text = f"⚠️ Partial progress ({week_achieved}/{weekly_target}). Carry forward {shortfall}."
+            elif week_achieved == 0:
+                note_text = f"🔴 No progress recorded this week. {weekly_target} carried forward."
 
-            # Save auto note if not already present
-            if auto_note:
-                existing_auto = notes_df[
-                    (notes_df["user_id"] == user_id) &
-                    (notes_df["week"] == week) &
-                    (notes_df.get("auto", False) == True)
+            # Save auto note if not already in DB
+            if note_text and supabase:
+                existing = notes_df[
+                    (notes_df["week"] == week)
+                    & (notes_df.get("auto", False) == True)
                 ]
-                if existing_auto.empty:
+                if existing.empty:
                     try:
                         supabase.table("notes").insert({
-                            "user_id": user_id,
                             "week": week,
-                            "note": auto_note,
+                            "note": note_text,
                             "auto": True,
                             "timestamp": str(today)
                         }).execute()
-                    except Exception as e:
-                        st.error(f"Error saving auto note: {e}")
+                    except Exception:
+                        pass
 
-            # Combine notes
-            week_notes = notes_df[
-                (notes_df["user_id"] == user_id) &
-                (notes_df["week"] == week)
-            ]
-            auto_notes = week_notes[week_notes.get("auto", False) == True]["note"].tolist()
-
-            week_data.append({
-                "Week": week,
-                "Target": target_with_carry,
-                "Achieved": achieved,
-                "Shortfall": shortfall,
-                "Progress": progress,
-                "Auto_Notes": auto_notes,
-            })
-
-        # ---------- Render Weekly Cards ----------
-        for w in week_data:
-            with st.expander(f"📅 Week {w['Week']}"):
-                # Color-coded progress bar
-                prog_color = "green" if w["Progress"] >= 1 else "orange" if w["Progress"] >= 0.5 else "red"
-                st.markdown(
-                    f"""
-                    <div style="background:#f8f9fa;border:1px solid #ddd;padding:8px 12px;border-radius:8px;">
-                        <div style="font-weight:bold;">🎯 Target: {w['Target']} | ✅ Achieved: {w['Achieved']}</div>
-                        <div style="height:10px;background:#eee;border-radius:5px;overflow:hidden;margin-top:6px;">
-                            <div style="width:{w['Progress']*100}%;background:{prog_color};height:100%;"></div>
-                        </div>
+        for w in weekly_data:
+            prog_color = "green" if w["Progress"] >= 1 else "orange" if w["Progress"] >= 0.5 else "red"
+            st.markdown(
+                f"""
+                <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin-bottom:6px;">
+                    <b>Week {w['Week']}</b> — Target {int(w['Target'])}, Achieved {int(w['Achieved'])}
+                    <div style="background:#eee;border-radius:4px;height:8px;margin-top:4px;">
+                        <div style="width:{w['Progress']*100}%;background:{prog_color};height:8px;border-radius:4px;"></div>
                     </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+                    <div style="font-size:11px;color:gray;">Carry Forward: {int(w['Shortfall'])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-                if w["Shortfall"] > 0:
-                    st.warning(f"Carry Forward: {w['Shortfall']}")
-
-                # --- Auto Notes Display ---
-                if w["Auto_Notes"]:
-                    for n in w["Auto_Notes"]:
-                        st.info(n)
-
-    # ---------- Summary ----------
+    # ---------- Auto Notes Section ----------
     st.markdown("---")
-    st.subheader("📊 Summary of All Weeks")
+    st.subheader("🗒 Automatic Notes")
 
-    summary_df = pd.DataFrame(week_data)
-    summary_df["Progress (%)"] = (summary_df["Progress"] * 100).astype(int)
-    st.dataframe(
-        summary_df[["Week", "Target", "Achieved", "Shortfall", "Progress (%)"]],
-        use_container_width=True,
-        hide_index=True
-    )
+    if "notes" in locals() and not notes_df.empty:
+        auto_notes = notes_df[notes_df.get("auto", False) == True]
+        if auto_notes.empty:
+            st.info("No automatic notes yet.")
+        else:
+            for _, note in auto_notes.sort_values("week").iterrows():
+                st.info(f"**Week {note['week']}** — {note['note']}")
+    else:
+        st.info("No automatic notes found.")
 
 # ---------------------- Daily Upload ----------------------
 # ---------------------- Daily Upload ----------------------
