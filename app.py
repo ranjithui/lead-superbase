@@ -395,13 +395,10 @@ elif tab == "Reporting":
         )
 
 # ---------------------- Admin ----------------------
-# ---------------------- Admin Panel ----------------------
+# ---------------------- ADMIN PANEL ----------------------
 elif tab == "Admin":
-    import pandas as pd
-    import streamlit as st
-
-    st.header("👑 Admin Panel – Team & Member Management")
-    st.caption("Manage teams, members, and their targets in a compact list view.")
+    st.header("👑 Admin Panel")
+    st.caption("Manage teams, members, and their targets")
 
     # ---------- Helper: Load Table ----------
     def get_table(name):
@@ -436,12 +433,12 @@ elif tab == "Admin":
                             "name": team_name,
                             "description": team_description
                         }).execute()
-                        st.success(f"✅ Team '{team_name}' created.")
+                        st.success(f"✅ Team '{team_name}' created successfully.")
                         st.experimental_rerun()
                     except Exception as e:
                         st.error(f"Error creating team: {e}")
                 else:
-                    st.warning("⚠️ Team name is required.")
+                    st.warning("⚠️ Please enter a team name.")
 
     # ---------------- Display Teams ----------------
     st.subheader("🏢 Teams List")
@@ -458,7 +455,7 @@ elif tab == "Admin":
         team_to_delete = st.selectbox("🗑 Select Team to Delete", ["Select"] + list(teams_df["name"]))
         if team_to_delete != "Select":
             team_id = teams_df.loc[teams_df["name"] == team_to_delete, "id"].values[0]
-            if st.button("Confirm Delete Team", key="delete_team_button"):
+            if st.button("Confirm Delete Team"):
                 try:
                     supabase.table("teams").delete().eq("id", team_id).execute()
                     st.success(f"✅ Deleted team '{team_to_delete}'.")
@@ -508,95 +505,82 @@ elif tab == "Admin":
 
     st.markdown("---")
 
-    # ---------------- Manage Members ----------------
-    st.subheader("🧑‍💼 Manage Members")
+    # ---------------- Hierarchical Team & Member Target View ----------------
+    st.subheader("📋 Team & Member Targets Overview")
 
-    if users_df.empty:
-        st.info("No members found.")
+    if teams_df.empty:
+        st.info("No teams found.")
     else:
-        # Merge related data
-        users_df = users_df.merge(
-            teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
-            on="team_id", how="left"
-        )
+        # Merge users with targets
+        users_targets = users_df.merge(
+            targets_df.rename(columns={
+                "user_id": "id",
+                "weekly_target": "Weekly_Target",
+                "monthly_target": "Monthly_Target"
+            }),
+            on="id", how="left"
+        ) if not users_df.empty else pd.DataFrame()
 
-        if not targets_df.empty:
-            users_df = users_df.merge(
-                targets_df.rename(columns={
-                    "user_id": "id",
-                    "weekly_target": "Weekly_Target",
-                    "monthly_target": "Monthly_Target"
-                }),
-                on="id", how="left"
+        # Loop through each team
+        for _, team in teams_df.iterrows():
+            team_id = team["id"]
+            team_name = team["name"]
+
+            team_members = users_targets[users_targets["team_id"] == team_id]
+
+            # Calculate team total target
+            team_weekly_target = team_members["Weekly_Target"].sum() if not team_members.empty else 0
+            team_monthly_target = team_members["Monthly_Target"].sum() if not team_members.empty else 0
+
+            # Team Card
+            st.markdown(
+                f"""
+                <div style="
+                    background-color:#f8f9fa;
+                    border:1px solid #ddd;
+                    border-radius:8px;
+                    padding:10px 14px;
+                    margin-top:10px;
+                ">
+                    <div style="display:flex; justify-content:space-between;">
+                        <div>
+                            <strong>🏢 {team_name}</strong><br>
+                            <small style="color:gray;">{len(team_members)} Members</small>
+                        </div>
+                        <div style="text-align:right;">
+                            <b>Weekly Target:</b> {int(team_weekly_target)}<br>
+                            <b>Monthly Target:</b> {int(team_monthly_target)}
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
-        # Show in table-style view
-        st.write("### 📋 Member List")
-        compact_df = users_df[[
-            "name", "team_name", "Weekly_Target", "Monthly_Target", "id"
-        ]].rename(columns={
-            "name": "Member",
-            "team_name": "Team",
-            "Weekly_Target": "Weekly Target",
-            "Monthly_Target": "Monthly Target",
-            "id": "Member ID"
-        })
-
-        st.dataframe(compact_df, use_container_width=True, hide_index=True)
-
-        st.markdown("### ✏️ Update or Delete Member")
-
-        member_to_edit = st.selectbox(
-            "Select Member", ["Select"] + list(users_df["name"])
-        )
-
-        if member_to_edit != "Select":
-            member = users_df[users_df["name"] == member_to_edit].iloc[0]
-
-            st.write(f"**Current Team:** {member.get('team_name', '—')}")
-            st.write(f"**Member ID:** `{member['id']}`")
-
-            col1, col2, col3, col4 = st.columns(4)
-
-            new_team = col1.selectbox(
-                "Move to Team",
-                list(teams_df["name"]) if not teams_df.empty else [],
-                index=list(teams_df["name"]).index(member["team_name"]) if member["team_name"] in list(teams_df["name"]) else 0
-            )
-
-            new_weekly = col2.number_input("Weekly Target", min_value=0, value=int(member.get("Weekly_Target", 0)))
-            new_monthly = col3.number_input("Monthly Target", min_value=0, value=int(member.get("Monthly_Target", 0)))
-
-            update_btn = col4.button("💾 Update", use_container_width=True)
-            delete_btn = st.button("🗑 Delete Member", type="secondary")
-
-            if update_btn:
-                try:
-                    new_team_id = teams_df.loc[teams_df["name"] == new_team, "id"].values[0]
-                    supabase.table("users").update({"team_id": new_team_id}).eq("id", member["id"]).execute()
-
-                    # Update or insert targets
-                    target_exists = not targets_df[targets_df["user_id"] == member["id"]].empty
-                    if target_exists:
-                        supabase.table("targets").update({
-                            "weekly_target": new_weekly,
-                            "monthly_target": new_monthly
-                        }).eq("user_id", member["id"]).execute()
-                    else:
-                        supabase.table("targets").insert({
-                            "user_id": member["id"],
-                            "weekly_target": new_weekly,
-                            "monthly_target": new_monthly
-                        }).execute()
-                    st.success(f"✅ Updated {member_to_edit}'s details.")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error updating member: {e}")
-
-            if delete_btn:
-                try:
-                    supabase.table("users").delete().eq("id", member["id"]).execute()
-                    st.success(f"✅ Deleted member {member_to_edit}.")
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error deleting member: {e}")
+            # Members Under Team
+            if team_members.empty:
+                st.markdown("<div style='margin-left:20px; color:gray;'>No members in this team.</div>", unsafe_allow_html=True)
+            else:
+                for _, member in team_members.iterrows():
+                    st.markdown(
+                        f"""
+                        <div style="
+                            margin-left:20px;
+                            background:#ffffff;
+                            border:1px solid #eee;
+                            border-radius:6px;
+                            padding:6px 10px;
+                            margin-top:6px;
+                            display:flex;
+                            justify-content:space-between;
+                            align-items:center;
+                        ">
+                            <div>👤 <strong>{member['name']}</strong></div>
+                            <div style="font-size:12px; color:gray;">
+                                Weekly: {int(member.get('Weekly_Target', 0))} |
+                                Monthly: {int(member.get('Monthly_Target', 0))}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
