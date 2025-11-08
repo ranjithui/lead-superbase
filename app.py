@@ -27,7 +27,8 @@ tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admi
 
 # ---------------------- Dashboard ----------------------
 # ---------------------- DASHBOARD ----------------------
-elif tab == "Dashboard":
+if tab == "Dashboard":
+
     st.header("📊 Dashboard Overview")
 
     # ---------- Helper: Load Table ----------
