@@ -629,7 +629,15 @@ elif tab == "Admin":
                                 new_team = st.selectbox(
                                     "Switch Team",
                                     options=list(teams_df["name"]),
-                                    index=list(teams_df["id"]).index(member["team_id"]) if member["team_id"] in list(teams_df["id"]) else 0
+                                    existing_team_ids = list(teams_df["id"])
+default_index = existing_team_ids.index(member["team_id"]) if member.get("team_id") in existing_team_ids else 0
+
+new_team = st.selectbox(
+    "Switch Team",
+    options=list(teams_df["name"]),
+    index=default_index
+)
+
                                 )
                                 new_weekly = st.number_input("Weekly Target", value=int(member.get("Weekly_Target", 0)))
                                 new_monthly = st.number_input("Monthly Target", value=int(member.get("Monthly_Target", 0)))
