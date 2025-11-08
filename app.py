@@ -366,12 +366,14 @@ elif tab == "Daily Upload":
             st.dataframe(summary, use_container_width=True)
 # ---------------------- Reporting ----------------------
 # ---------------------- Reporting ----------------------
-# ---------------------- Reporting ----------------------
 elif tab == "Reporting":
-    st.header("📊 Reporting & Insights")
-    st.caption("View weekly or monthly summaries of team and member performance")
+    st.header("📅 Lead & Sales Reporting")
+    st.caption("Generate weekly, monthly, or custom range reports for teams and members.")
 
-    # --- Load Data Helper ---
+    import io
+    from datetime import timedelta
+
+    # --- Fetch Helper ---
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
@@ -382,167 +384,156 @@ elif tab == "Reporting":
                 df["team_id"] = df["team_id"].astype(str)
             return df
         except Exception as e:
-            st.warning(f"⚠️ Could not load {name}: {e}")
+            st.warning(f"⚠️ Error loading {name}: {e}")
             return pd.DataFrame()
 
-    # --- Fetch Data ---
+    # --- Load data ---
+    leads_df = get_table("leads")
     teams_df = get_table("teams")
     users_df = get_table("users")
-    leads_df = get_table("leads")
 
-    # --- Check Data Availability ---
     if leads_df.empty:
-        st.info("No lead data available yet.")
+        st.info("No leads data found yet.")
         st.stop()
 
-    # --- Safely clean date fields ---
+    # --- Preprocess ---
     if "created_at" in leads_df.columns:
         leads_df["created_at"] = pd.to_datetime(leads_df["created_at"], errors="coerce")
-        leads_df = leads_df.dropna(subset=["created_at"])  # remove invalid dates
-        leads_df["week"] = leads_df["created_at"].dt.isocalendar().week.astype(int)
-        leads_df["month"] = leads_df["created_at"].dt.month.astype(int)
-        leads_df["year"] = leads_df["created_at"].dt.year.astype(int)
-    else:
-        st.error("❌ Missing 'created_at' column in leads table.")
-        st.stop()
-
-    if "year" not in leads_df.columns:
-        st.error("Year column missing after date processing.")
-        st.stop()
+    leads_df["sales_value"] = leads_df["sales_value"].fillna(0)
+    leads_df["converted"] = leads_df["converted"].astype(bool)
 
     # --- Filters ---
-    st.sidebar.header("📅 Filters")
-    report_type = st.sidebar.selectbox("Report Type", ["Weekly", "Monthly"])
-    selected_team = st.sidebar.selectbox("Team", ["All"] + list(teams_df["name"]))
-    selected_year = st.sidebar.number_input(
-        "Year", min_value=2020, max_value=datetime.now().year, value=datetime.now().year
+    st.subheader("🔍 Filter Report")
+
+    report_type = st.selectbox("Select Report Type", ["Weekly", "Monthly", "Custom Range"])
+    today = datetime.utcnow().date()
+
+    if report_type == "Weekly":
+        start_date = st.date_input("Start Date", today - timedelta(days=7))
+        end_date = st.date_input("End Date", today)
+    elif report_type == "Monthly":
+        start_date = st.date_input("Start Date", today - timedelta(days=30))
+        end_date = st.date_input("End Date", today)
+    else:
+        start_date = st.date_input("Custom Start Date", today - timedelta(days=15))
+        end_date = st.date_input("Custom End Date", today)
+
+    # --- Filter Data ---
+    try:
+        leads_df = leads_df[
+            (leads_df["created_at"].dt.date >= start_date)
+            & (leads_df["created_at"].dt.date <= end_date)
+        ]
+    except Exception as e:
+        st.error(f"Date filtering failed: {e}")
+        st.stop()
+
+    if leads_df.empty:
+        st.warning("No records found for the selected period.")
+        st.stop()
+
+    # --- Merge relational data ---
+    leads_df = leads_df.merge(
+        users_df.rename(columns={"id": "owner_id", "name": "Member", "team_id": "team_id"}),
+        on="owner_id", how="left"
+    ).merge(
+        teams_df.rename(columns={"id": "team_id", "name": "Team"}),
+        on="team_id", how="left"
     )
 
-    # --- Apply Filters ---
-    df_filtered = leads_df[leads_df["year"] == int(selected_year)]
-    if selected_team != "All":
-        team_id = teams_df.loc[teams_df["name"] == selected_team, "id"].values[0]
-        df_filtered = df_filtered[df_filtered["team_id"] == team_id]
-
-    # --- Summary Metrics ---
-    total_leads = len(df_filtered)
-    converted = df_filtered["converted"].sum() if "converted" in df_filtered.columns else 0
-    total_sales = df_filtered["sales_value"].sum() if "sales_value" in df_filtered.columns else 0
-    conversion_rate = (converted / total_leads * 100) if total_leads > 0 else 0
+    # --- Summary Calculations ---
+    total_leads = len(leads_df)
+    total_converted = leads_df["converted"].sum()
+    total_sales = leads_df["sales_value"].sum()
+    conversion_rate = (total_converted / total_leads * 100) if total_leads > 0 else 0
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📥 Total Leads", total_leads)
-    col2.metric("✅ Converted", int(converted))
-    col3.metric("📊 Conversion Rate", f"{conversion_rate:.1f}%")
-    col4.metric("💰 Total Sales", f"₹{total_sales:,.0f}")
+    col1.metric("📋 Total Leads", total_leads)
+    col2.metric("✅ Converted", int(total_converted))
+    col3.metric("💰 Total Sales", f"₹{total_sales:,.0f}")
+    col4.metric("📈 Conversion Rate", f"{conversion_rate:.1f}%")
 
     st.markdown("---")
 
-    # --- Team Performance Summary ---
+    # --- Team-wise Summary ---
     st.subheader("🏢 Team Performance Summary")
 
-    if not df_filtered.empty and "team_id" in df_filtered.columns:
-        team_summary = (
-            df_filtered.groupby("team_id")
-            .agg(
-                Total_Leads=("id", "count"),
-                Converted=("converted", "sum"),
-                Total_Sales=("sales_value", "sum"),
-            )
-            .reset_index()
+    team_summary = (
+        leads_df.groupby("Team", dropna=False)
+        .agg(
+            Total_Leads=("id", "count"),
+            Converted=("converted", "sum"),
+            Total_Sales=("sales_value", "sum")
         )
+        .reset_index()
+    )
+    team_summary["Conversion_%"] = (
+        (team_summary["Converted"] / team_summary["Total_Leads"]) * 100
+    ).round(2)
 
-        team_summary = team_summary.merge(
-            teams_df[["id", "name"]], left_on="team_id", right_on="id", how="left"
-        ).rename(columns={"name": "Team"})[["Team", "Total_Leads", "Converted", "Total_Sales"]]
+    st.dataframe(team_summary, use_container_width=True)
 
-        team_summary["Conversion_%"] = (
-            team_summary["Converted"] / team_summary["Total_Leads"] * 100
-        ).round(2)
+    st.markdown("---")
 
-        st.dataframe(team_summary, use_container_width=True)
-    else:
-        st.info("No team data available.")
+    # --- Member-wise Summary ---
+    st.subheader("👥 Member Leaderboard")
 
-    # --- Member Leaderboard ---
-    st.subheader("🏆 Member Leaderboard")
-
-    if not df_filtered.empty and "owner_id" in df_filtered.columns:
-        member_summary = (
-            df_filtered.groupby("owner_id")
-            .agg(
-                Total_Leads=("id", "count"),
-                Converted=("converted", "sum"),
-                Total_Sales=("sales_value", "sum"),
-            )
-            .reset_index()
+    member_summary = (
+        leads_df.groupby(["Member", "Team"], dropna=False)
+        .agg(
+            Total_Leads=("id", "count"),
+            Converted=("converted", "sum"),
+            Total_Sales=("sales_value", "sum")
         )
+        .reset_index()
+    )
+    member_summary["Conversion_%"] = (
+        (member_summary["Converted"] / member_summary["Total_Leads"]) * 100
+    ).round(2)
 
-        member_summary = (
-            member_summary.merge(users_df[["id", "name", "team_id"]], left_on="owner_id", right_on="id", how="left")
-            .merge(teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "Team"}), on="team_id", how="left")
-            .rename(columns={"name": "Member"})
-        )[["Member", "Team", "Total_Leads", "Converted", "Total_Sales"]]
+    st.dataframe(member_summary.sort_values("Converted", ascending=False), use_container_width=True)
 
-        member_summary["Conversion_%"] = (
-            member_summary["Converted"] / member_summary["Total_Leads"] * 100
-        ).round(2)
-        member_summary = member_summary.sort_values("Total_Sales", ascending=False)
+    # --- Top Performers ---
+    st.markdown("---")
+    st.subheader("🏆 Top Performers")
 
-        st.dataframe(member_summary, use_container_width=True)
-    else:
-        st.info("No member-level data available.")
+    top_team = team_summary.sort_values("Converted", ascending=False).head(1)
+    top_member = member_summary.sort_values("Converted", ascending=False).head(1)
 
-    # --- Export Reports ---
-    st.markdown("### 📁 Export Reports")
+    if not top_team.empty:
+        st.success(f"⭐ **Top Team:** {top_team.iloc[0]['Team']} — {int(top_team.iloc[0]['Converted'])} conversions.")
+    if not top_member.empty:
+        st.info(f"👤 **Top Member:** {top_member.iloc[0]['Member']} ({top_member.iloc[0]['Team']}) — {int(top_member.iloc[0]['Converted'])} conversions.")
 
-    if not df_filtered.empty:
-        csv_data = member_summary.to_csv(index=False).encode("utf-8")
+    st.markdown("---")
 
-        st.download_button(
-            label="📥 Download Member Report (CSV)",
-            data=csv_data,
-            file_name=f"member_report_{report_type.lower()}_{selected_year}.csv",
-            mime="text/csv",
-        )
+    # --- Export Options ---
+    st.subheader("📦 Export Data")
 
-        # Excel export
-        import io
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-            if not team_summary.empty:
-                team_summary.to_excel(writer, sheet_name="Team Summary", index=False)
-            if not member_summary.empty:
-                member_summary.to_excel(writer, sheet_name="Member Leaderboard", index=False)
+    # Auto Excel Export with safe fallback
+    excel_buffer = io.BytesIO()
+    try:
+        import xlsxwriter
+        engine = "xlsxwriter"
+    except ModuleNotFoundError:
+        try:
+            import openpyxl
+            engine = "openpyxl"
+        except ModuleNotFoundError:
+            engine = None
+
+    if engine:
+        with pd.ExcelWriter(excel_buffer, engine=engine) as writer:
+            team_summary.to_excel(writer, sheet_name="Team Summary", index=False)
+            member_summary.to_excel(writer, sheet_name="Member Summary", index=False)
         st.download_button(
             label="📘 Download Full Report (Excel)",
             data=excel_buffer.getvalue(),
-            file_name=f"lead_report_{report_type.lower()}_{selected_year}.xlsx",
+            file_name=f"lead_report_{report_type.lower()}_{start_date}_{end_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-
-    # --- Summary Insights ---
-    st.markdown("---")
-    st.subheader("🧠 Insights Summary")
-
-    if not df_filtered.empty:
-        if not team_summary.empty:
-            best_team = team_summary.loc[team_summary["Total_Sales"].idxmax(), "Team"]
-        else:
-            best_team = "N/A"
-
-        if not member_summary.empty:
-            top_member = member_summary.loc[member_summary["Total_Sales"].idxmax(), "Member"]
-        else:
-            top_member = "N/A"
-
-        st.success(
-            f"🏅 **Top Team:** {best_team}\n\n"
-            f"💼 **Top Performer:** {top_member}\n\n"
-            f"📈 Overall conversion rate: {conversion_rate:.1f}%"
-        )
     else:
-        st.info("Not enough data to generate insights.")
+        st.error("❌ Excel libraries not installed. Please install xlsxwriter or openpyxl to enable export.")
 
 
 # ---------------------- Admin ----------------------
