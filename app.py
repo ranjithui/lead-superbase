@@ -26,178 +26,112 @@ st.title("📊 Lead Management System")
 tab = st.sidebar.radio("Go to", ["Dashboard", "Daily Upload", "Reporting", "Admin"])
 
 # ---------------------- Dashboard ----------------------
-# ---------------------- Dashboard ----------------------
-if tab == "Dashboard":
-    st.header("📊 Team & Member Performance Dashboard")
-    st.caption("Weekly performance overview with auto carry-forward and system notes.")
+# ---------------------- DASHBOARD ----------------------
+elif tab == "Dashboard":
+    st.header("📊 Dashboard Overview")
 
-    # --- Helper to fetch Supabase tables ---
+    # ---------- Helper: Load Table ----------
     def get_table(name):
         try:
             res = supabase.table(name).select("*").execute()
-            df = pd.DataFrame(res.data if hasattr(res, "data") else res)
-            if not df.empty:
-                for col in ["id", "team_id", "user_id"]:
-                    if col in df.columns:
-                        df[col] = df[col].astype(str)
+            data = res.data if hasattr(res, "data") and res.data else []
+            df = pd.DataFrame(data)
+            # Ensure 'id' and 'team_id' columns exist even if table is empty
+            if "id" not in df.columns:
+                df["id"] = []
+            if "team_id" in df.columns:
+                df["team_id"] = df["team_id"].astype(str)
             return df
         except Exception as e:
-            st.warning(f"⚠️ Failed to load {name}: {e}")
-            return pd.DataFrame()
+            st.warning(f"⚠️ Error loading {name}: {e}")
+            return pd.DataFrame(columns=["id"])
 
-    # --- Load all tables ---
-    teams_df = get_table("teams")
+    # ---------- Load Data ----------
     users_df = get_table("users")
-    targets_df = get_table("targets")
+    teams_df = get_table("teams")
     leads_df = get_table("leads")
-    notes_df = get_table("notes")
+    targets_df = get_table("targets")
 
-    # --- Prepare Notes week column ---
-    if not notes_df.empty:
-        notes_df["created_at"] = pd.to_datetime(notes_df["created_at"], errors="coerce")
-        notes_df["week"] = notes_df["created_at"].dt.isocalendar().week
-    else:
-        notes_df = pd.DataFrame(columns=["id", "user_id", "team_id", "note", "note_type", "created_at", "week"])
-
-    # --- Get current week ---
-    current_week = datetime.utcnow().isocalendar().week
-
-    # --- Lead Summary ---
-    if not leads_df.empty:
-        leads_df["converted"] = leads_df["converted"].astype(bool)
-        leads_df["sales_value"] = leads_df["sales_value"].fillna(0)
-        leads_df["created_at"] = pd.to_datetime(leads_df["created_at"], errors="coerce")
-        leads_df["week"] = leads_df["created_at"].dt.isocalendar().week
-
-        lead_summary = leads_df.groupby(["owner_id", "week"]).agg(
-            total_leads=("id", "count"),
-            converted=("converted", "sum"),
-            total_sales=("sales_value", "sum")
-        ).reset_index()
-    else:
-        lead_summary = pd.DataFrame(columns=["owner_id", "week", "total_leads", "converted", "total_sales"])
-
-    # --- Merge users, teams, and targets ---
-    members = users_df.merge(
-        teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
-        on="team_id", how="left"
-    )
-    if not targets_df.empty:
-        members = members.merge(
-            targets_df.rename(columns={"user_id": "id"}), on="id", how="left"
+    # ---------- Safe Merge for Members ----------
+    if not users_df.empty and "team_id" in users_df.columns and not teams_df.empty:
+        members = users_df.merge(
+            teams_df[["id", "name"]].rename(columns={"id": "team_id", "name": "team_name"}),
+            on="team_id", how="left"
         )
-    members["weekly_target"] = members.get("weekly_target", 0).fillna(0)
+    else:
+        members = pd.DataFrame()
 
-    # --- Summary Header ---
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🏢 Total Teams", len(teams_df))
-    col2.metric("👥 Members", len(users_df))
-    col3.metric("📆 Current Week", current_week)
+    # ---------- Summary Stats ----------
+    total_teams = len(teams_df)
+    total_members = len(users_df)
+    total_leads = len(leads_df)
 
-    st.markdown("---")
+    st.markdown(
+        f"""
+        <div style='display:flex; justify-content:space-around; background:#f8f9fa;
+        border-radius:10px; padding:10px; margin-bottom:15px;'>
+            <div><b>🏢 Teams:</b> {total_teams}</div>
+            <div><b>👥 Members:</b> {total_members}</div>
+            <div><b>📋 Leads:</b> {total_leads}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    # --- Loop over Teams ---
-    for _, team in teams_df.iterrows():
-        team_id = team["id"]
-        team_name = team["name"]
-        team_members = members[members["team_id"] == team_id]
+    # ---------- Leads Overview ----------
+    st.subheader("📈 Leads Overview")
+    if leads_df.empty:
+        st.info("No leads data available yet.")
+    else:
+        lead_counts = leads_df.groupby("status").size().reset_index(name="count")
+        st.dataframe(lead_counts, use_container_width=True)
 
-        if team_members.empty:
-            continue
-
-        st.subheader(f"🏢 {team_name}")
-
-        # --- Team-level weekly totals ---
-        team_leads = lead_summary[
-            (lead_summary["owner_id"].isin(team_members["id"])) &
-            (lead_summary["week"] == current_week)
-        ]
-
-        # --- Safe calculations ---
-        total_converted = float(team_leads["converted"].sum() if "converted" in team_leads else 0)
-        total_sales = float(team_leads["total_sales"].sum() if "total_sales" in team_leads else 0)
-        total_target = float(team_members["weekly_target"].sum() if "weekly_target" in team_members else 0)
-
-        progress = (total_converted / total_target * 100) if total_target > 0 else 0
-
-        st.progress(min(progress / 100, 1.0))
-        st.caption(f"🎯 Progress: {progress:.1f}% — Converted {int(total_converted)}/{int(total_target)} leads — ₹{total_sales:,.0f}")
-
-        # --- Carry Forward Logic (safe) ---
-        if total_target > 0 and progress < 100:
-            incomplete = max(total_target - total_converted, 0)
-            note_exists = not notes_df[
-                (notes_df["team_id"] == team_id) & (notes_df["week"] == current_week)
-            ].empty
-
-            if not note_exists and incomplete > 0:
-                try:
-                    note_text = f"Carried forward {int(incomplete)} incomplete leads to next week."
-                    supabase.table("notes").insert({
-                        "team_id": team_id,
-                        "note": note_text,
-                        "note_type": "auto"
-                    }).execute()
-                except Exception as e:
-                    st.warning(f"⚠️ Failed to save auto note: {e}")
-
-        # --- Display Recent Notes ---
-        recent_notes = notes_df[notes_df["team_id"] == team_id].sort_values("created_at", ascending=False).head(3)
-        if not recent_notes.empty:
-            st.markdown("**📝 Recent Notes:**")
-            for _, n in recent_notes.iterrows():
-                st.markdown(
-                    f"- *Week {int(n['week'])}*: {n['note']} ({n['created_at'].strftime('%Y-%m-%d')})"
-                )
-        else:
-            st.caption("No notes yet for this team.")
-
-        # --- Member Breakdown ---
-        st.markdown("### 👥 Team Members")
-        for _, member in team_members.iterrows():
-            m_id = member["id"]
-            m_target = float(member.get("weekly_target", 0))
-            m_leads = lead_summary[
-                (lead_summary["owner_id"] == m_id) &
-                (lead_summary["week"] == current_week)
-            ]
-            converted = int(m_leads["converted"].sum()) if not m_leads.empty else 0
-            sales = float(m_leads["total_sales"].sum()) if not m_leads.empty else 0
-            progress_m = (converted / m_target * 100) if m_target > 0 else 0
-
-            st.markdown(
-                f"""
-                <div style="
-                    background:#f9f9f9;
-                    border:1px solid #e0e0e0;
-                    border-radius:8px;
-                    padding:6px 10px;
-                    margin-bottom:4px;
-                ">
-                    <div style="display:flex; justify-content:space-between;">
-                        <div>👤 <b>{member['name']}</b></div>
-                        <div>{converted}/{int(m_target)} leads | ₹{sales:,.0f}</div>
-                    </div>
-                    <div style="background:#e9ecef; border-radius:4px; height:5px; margin-top:3px;">
-                        <div style="background:#28a745; width:{min(progress_m,100)}%; height:5px; border-radius:4px;"></div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
+    # ---------- Members and Targets ----------
+    st.subheader("🎯 Members & Targets")
+    if members.empty:
+        st.info("No team or member data yet.")
+    else:
+        # Merge members with targets
+        if not targets_df.empty and "user_id" in targets_df.columns:
+            merged = members.merge(
+                targets_df.rename(columns={
+                    "user_id": "id",
+                    "weekly_target": "Weekly_Target",
+                    "monthly_target": "Monthly_Target"
+                }),
+                on="id", how="left"
             )
+        else:
+            merged = members.copy()
+            merged["Weekly_Target"] = 0
+            merged["Monthly_Target"] = 0
 
-        st.markdown("---")
+        # Display
+        st.dataframe(
+            merged[["name", "team_name", "Weekly_Target", "Monthly_Target"]],
+            use_container_width=True,
+            hide_index=True
+        )
 
-    # --- Overall Summary ---
-    total_leads = lead_summary[lead_summary["week"] == current_week]["total_leads"].sum()
-    total_converted = lead_summary[lead_summary["week"] == current_week]["converted"].sum()
-    total_sales = lead_summary[lead_summary["week"] == current_week]["total_sales"].sum()
-    overall_progress = (total_converted / total_leads * 100) if total_leads > 0 else 0
+        # ---------- Summary by Team ----------
+        st.subheader("🏆 Team Target Summary")
+        team_summary = (
+            merged.groupby("team_name")[["Weekly_Target", "Monthly_Target"]]
+            .sum()
+            .reset_index()
+        )
+        st.dataframe(team_summary, use_container_width=True)
 
-    st.subheader("📈 Overall Company Summary")
-    st.progress(min(overall_progress / 100, 1.0))
-    st.caption(f"Total Leads: {int(total_leads)} | Converted: {int(total_converted)} | Sales: ₹{total_sales:,.0f} | Conversion Rate: {overall_progress:.1f}%")
+        # ---------- Charts ----------
+        import matplotlib.pyplot as plt
 
+        if not team_summary.empty:
+            fig, ax = plt.subplots()
+            ax.bar(team_summary["team_name"], team_summary["Monthly_Target"])
+            ax.set_title("Monthly Targets by Team")
+            ax.set_xlabel("Team")
+            ax.set_ylabel("Monthly Target")
+            st.pyplot(fig)
 
 # ---------------------- Daily Upload ----------------------
 # ---------------------- Daily Upload ----------------------
